@@ -1,6 +1,0 @@
-{
-  "name": "Calloway Market",
-  "description": "Bespoke liquor store catalog showcasing curated spirits without prices for Calloway Market in Bakersfield, CA, paired with a live AI-powered merchant dashboard displaying local search demands.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
