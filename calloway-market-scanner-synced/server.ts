@@ -394,6 +394,22 @@ app.delete("/api/products/:id", requireMerchantAuth, async (req, res) => {
 // 1e. Toggle a single product's stock status (In Stock <-> Temporarily Out of Stock)
 app.patch("/api/products/:id/stock", requireMerchantAuth, async (req, res) => {
   const { id } = req.params;
+
+  // FIX: this endpoint saves the ENTIRE currentProducts list back to
+  // Supabase on every toggle. If this server instance's in-memory copy
+  // was stale or incomplete (e.g. right after a cold start with a
+  // Supabase hiccup), a single innocent stock toggle would silently
+  // overwrite the real inventory with a smaller one. Same protection as
+  // the upload/delete endpoints above.
+  if (!lastProductLoadWasReliable) {
+    currentProducts = await loadProductsFromDisk();
+    if (!lastProductLoadWasReliable) {
+      return res.status(503).json({
+        error: "Could not confirm your current inventory is up to date. Please try again in a moment — nothing was changed."
+      });
+    }
+  }
+
   const product = currentProducts.find((p) => p.id === id);
   if (!product) {
     return res.status(404).json({ error: `Product with ID ${id} not found.` });
@@ -412,6 +428,16 @@ app.patch("/api/products/:id/stock", requireMerchantAuth, async (req, res) => {
 // based on sales data or any algorithm, per request.
 app.patch("/api/products/:id/featured", requireMerchantAuth, async (req, res) => {
   const { id } = req.params;
+
+  if (!lastProductLoadWasReliable) {
+    currentProducts = await loadProductsFromDisk();
+    if (!lastProductLoadWasReliable) {
+      return res.status(503).json({
+        error: "Could not confirm your current inventory is up to date. Please try again in a moment — nothing was changed."
+      });
+    }
+  }
+
   const product = currentProducts.find((p) => p.id === id);
   if (!product) {
     return res.status(404).json({ error: `Product with ID ${id} not found.` });
