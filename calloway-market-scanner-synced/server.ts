@@ -276,7 +276,31 @@ function extractBrand(query: string): string {
 // API Endpoints
 
 // 1. Get all products
-app.get("/api/products", (req, res) => {
+// FIX: this used to just return whatever was cached in memory
+// (currentProducts) from whenever this particular serverless instance last
+// loaded it. On Vercel, multiple instances can be running simultaneously,
+// each with its own possibly-stale in-memory copy — so different visitors
+// could see different item counts depending on which instance handled
+// their request. Now always re-reads from Supabase first, so every request
+// gets the real current data. Falls back to the in-memory copy only if
+// Supabase is unreachable, so the site still responds instead of erroring.
+app.get("/api/products", async (req, res) => {
+  try {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from("website_products")
+        .select("data")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      if (data) {
+        currentProducts = data.map((row) => row.data as Product);
+        lastProductLoadWasReliable = true;
+        return res.json(currentProducts);
+      }
+    }
+  } catch (err) {
+    console.error("Failed to fetch fresh products from Supabase, serving last known in-memory snapshot instead:", err);
+  }
   res.json(currentProducts);
 });
 
