@@ -827,6 +827,9 @@ app.use(async (req, res, next) => {
   next();
 });
 
+async function startLocalDevServer() {
+  await ensureDataLoaded();
+    
   if (process.env.NODE_ENV !== "production") {
     console.log("Starting Express server in development mode with Vite HMR middleware...");
     const { createServer: createViteServer } = await import("vite");
