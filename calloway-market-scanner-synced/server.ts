@@ -4,8 +4,8 @@ import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
-import { PRODUCTS } from "./src/productsData";
-import { SearchQuery, Product } from "./src/types";
+import { PRODUCTS } from "./src/productsData.js";
+import { SearchQuery, Product } from "./src/types.js";
 
 dotenv.config();
 
