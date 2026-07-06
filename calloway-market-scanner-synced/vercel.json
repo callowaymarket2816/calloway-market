@@ -1,8 +1,8 @@
 {
-  "buildCommand": "vite build --outDir public",
-  "outputDirectory": "public",
- "rewrites": [
+  "buildCommand": "vite build --outDir vercel_output",
+  "outputDirectory": "vercel_output",
+  "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/sitemap.xml", "destination": "/sitemap.xml" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
+}
