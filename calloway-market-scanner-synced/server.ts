@@ -1,6 +1,6 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
+
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
@@ -827,17 +827,16 @@ app.use(async (req, res, next) => {
   next();
 });
 
-async function startLocalDevServer() {
-  await ensureDataLoaded();
-
   if (process.env.NODE_ENV !== "production") {
     console.log("Starting Express server in development mode with Vite HMR middleware...");
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
+
     console.log("Starting Express server in production mode serving static assets...");
     const publicPath = path.join(process.cwd(), "public");
     app.use(express.static(publicPath));
