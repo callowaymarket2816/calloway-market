@@ -70,11 +70,27 @@ async function loadProductsFromDisk(): Promise<Product[]> {
     return memoryProductsFallback;
   }
   try {
-    const { data, error } = await supabase
-      .from("website_products")
-      .select("data")
-      .order("created_at", { ascending: false });
-    if (error) throw error;
+    // FIX: Supabase caps every .select() at a max-rows limit (1000 by
+    // default) regardless of how many rows actually exist. A single
+    // .select() here was silently truncating real inventory down to
+    // 1000 items. This now pages through in batches of 1000 until every
+    // row is fetched, so the real count is never silently capped again.
+    const allRows: { data: Product }[] = [];
+    const pageSize = 1000;
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("website_products")
+        .select("data")
+        .order("created_at", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allRows.push(...(data as { data: Product }[]));
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+    const data = allRows;
     if (data && data.length > 0) {
       console.log(`Loaded ${data.length} products from Supabase.`);
       lastProductLoadWasReliable = true;
