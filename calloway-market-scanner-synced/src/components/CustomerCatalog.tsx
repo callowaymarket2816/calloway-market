@@ -32,11 +32,14 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
 
   // DoorDash supports a documented search deep-link per store, so each
   // product can link straight to a pre-filled search for its own name.
-  const getDoorDashUrl = (product?: Product) => {
-    const base = `https://www.doordash.com/convenience/store/${DOORDASH_STORE_ID}`;
-    if (!product) return `${base}?event_type=autocomplete&pickup=false`;
-    return `${base}/search/?query=${encodeURIComponent(product.name)}`;
+   const getDoorDashUrl = (product?: Product) => {
+    return `https://www.doordash.com/convenience/store/${DOORDASH_STORE_ID}?event_type=autocomplete&pickup=false`;
   };
+
+  const getGrubhubUrl = (product?: Product) => {
+    return `https://www.grubhub.com/restaurant/${GRUBHUB_RESTAURANT_SLUG}/${GRUBHUB_RESTAURANT_ID}`;
+  };
+
 
   // Grubhub doesn't publicly document a search deep-link the way DoorDash
   // does. This appends a query param that may or may not pre-filter
