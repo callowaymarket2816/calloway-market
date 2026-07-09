@@ -11,13 +11,6 @@ interface CustomerCatalogProps {
 }
 
 export default function CustomerCatalog({ products, isLoading, onSearchLog }: CustomerCatalogProps) {
-  // FIX: "Live Bakersfield Demand Radar" was removed from the customer
-  // view per request (the merchant dashboard already has an equivalent,
-  // more complete "recent searches" view via analytics.recentSearches).
-  // This also removes the 8-second polling loop that was hitting the
-  // server continuously just to feed that now-removed widget.
-  // triggerSearchFetch is kept as a harmless no-op since several
-  // search/category handlers below still call it.
   const triggerSearchFetch = () => {};
 
   const formatLocalTimeAgo = (isoString: string) => {
@@ -32,15 +25,27 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     return new Date(isoString).toLocaleDateString();
   };
 
-  // REMOVED: a getProductPrice() fallback used to be here that invented a
-  // price based on guessing the category (e.g. "any whiskey = $79.99") any
-  // time a real price was missing. That's a real risk for a liquor store —
-  // showing a customer a price you never set. Real prices now come directly
-  // from your verified inventory data; if one is ever missing, the product
-  // should show "Price unavailable" rather than a guess (see render logic
-  // below).
+  // Store/restaurant identifiers used to build per-product deep links.
+  const DOORDASH_STORE_ID = "34675059";
+  const GRUBHUB_RESTAURANT_SLUG = "calloway-market-2816-calloway-dr-bakersfield";
+  const GRUBHUB_RESTAURANT_ID = "6330952";
 
-  const DOORDASH_URL = "https://www.doordash.com/convenience/store/34675059?event_type=autocomplete&pickup=false";
+  // DoorDash supports a documented search deep-link per store, so each
+  // product can link straight to a pre-filled search for its own name.
+  const getDoorDashUrl = (product?: Product) => {
+    const base = `https://www.doordash.com/convenience/store/${DOORDASH_STORE_ID}`;
+    if (!product) return `${base}?event_type=autocomplete&pickup=false`;
+    return `${base}/search/?query=${encodeURIComponent(product.name)}`;
+  };
+
+  // Grubhub doesn't publicly document a search deep-link the way DoorDash
+  // does. This appends a query param that may or may not pre-filter
+  // results — if it doesn't, it still opens the correct restaurant page.
+  const getGrubhubUrl = (product?: Product) => {
+    const base = `https://www.grubhub.com/restaurant/${GRUBHUB_RESTAURANT_SLUG}/${GRUBHUB_RESTAURANT_ID}`;
+    if (!product) return base;
+    return `${base}?search=${encodeURIComponent(product.name)}`;
+  };
 
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
@@ -81,36 +86,34 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
 
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   
-  // DoorDash Redirection States
   const [redirectingProduct, setRedirectingProduct] = useState<Product | null>(null);
   const [isRedirectModalOpen, setIsRedirectModalOpen] = useState(false);
 
-  // Inquiry form states
   const [isInquiring, setIsInquiring] = useState(false);
   const [inquiryName, setInquiryName] = useState("");
   const [inquiryContact, setInquiryContact] = useState("");
   const [inquirySubmitted, setInquirySubmitted] = useState(false);
 
-  // Legacy Reservation Cart states (maintained for compatibility)
   const [cart, setCart] = useState<Product[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [cartName, setCartName] = useState("");
   const [cartContact, setCartContact] = useState("");
   const [cartSubmitted, setCartSubmitted] = useState(false);
 
-  // DoorDash Redirect action
   const handleAddToDoorDash = (product: Product) => {
-    // Log the selection event in Calloway's analytics
     onSearchLog(`DoorDash Redirect: ${product.name}`, product.category);
     triggerSearchFetch();
     setRedirectingProduct(product);
     setIsRedirectModalOpen(true);
-    
-    // Attempt automatic popup redirect
-    window.open(DOORDASH_URL, "_blank");
+    window.open(getDoorDashUrl(product), "_blank");
   };
 
-  // Add/Remove from cart handlers
+  const handleAddToGrubhub = (product: Product) => {
+    onSearchLog(`Grubhub Redirect: ${product.name}`, product.category);
+    triggerSearchFetch();
+    window.open(getGrubhubUrl(product), "_blank");
+  };
+
   const handleAddToCart = (product: Product) => {
     handleAddToDoorDash(product);
   };
@@ -123,7 +126,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     e.preventDefault();
     if (!cartName.trim() || !cartContact.trim() || cart.length === 0) return;
 
-    // Log the reservation searches for all bottles in the cart to sync with merchant analytics
     cart.forEach((bottle) => {
       onSearchLog(`Reserve Cart Order: ${bottle.name}`, bottle.category);
     });
@@ -138,19 +140,8 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     }, 5000);
   };
 
-  // FIX: this used to be a hardcoded fictional list ("Whiskey", "Tequila",
-  // "Craft Beer"...) that didn't match any category name in your real
-  // inventory (which uses "Liquor", "Beer", "RTD", "Soda", "Water", etc.) —
-  // meaning category filtering silently wouldn't have worked at all on real
-  // data. Categories are now derived directly from whatever products are
-  // actually loaded, so this always matches reality.
   const categories = ["All", ...Array.from(new Set(products.map((p) => p.category).filter(Boolean)))];
 
-  // NEW: subcategories available within the currently selected category
-  // (e.g. clicking "Liquor" reveals Whiskey & Bourbon, Tequila & Mezcal,
-  // Vodka, Gin, Rum, Brandy & Cognac, Cordials & Liqueurs as their own
-  // filter options). Only computed for the active category, and resets to
-  // "All" whenever the top-level category changes.
   const subcategories = selectedCategory === "All"
     ? []
     : ["All", ...Array.from(new Set(
@@ -159,12 +150,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           .map((p) => p.subcategory as string)
       ))];
 
-  // Filter products based on search term and category.
-  // FIX: origin and tastingNotes are empty for most real inventory items
-  // (no fabricated data filled in for them), so matching only on those plus
-  // name/description was weaker than it could be. Added subcategory, which
-  // is real, populated data for about 1 in 5 items (e.g. "Whiskey & Bourbon")
-  // and a useful extra search dimension where it exists.
   const filteredProducts = products.filter((product) => {
     const matchesCategory = selectedCategory === "All" || product.category === selectedCategory;
     const matchesSubcategory = selectedSubcategory === "All" || product.subcategory === selectedSubcategory;
@@ -178,7 +163,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     return matchesCategory && matchesSubcategory && matchesSearch;
   });
 
-  // Log search on backend when user presses Enter or clicks Search button
   const handleSearchSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (searchTerm.trim().length >= 2) {
@@ -187,10 +171,9 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     }
   };
 
-  // If category changes, log a search to record user browsing interest
   const handleCategorySelect = (category: string) => {
     setSelectedCategory(category);
-    setSelectedSubcategory("All"); // reset subcategory filter when switching categories
+    setSelectedSubcategory("All");
     if (category !== "All") {
       onSearchLog(`Browse Category: ${category}`, category);
       triggerSearchFetch();
@@ -201,7 +184,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     e.preventDefault();
     if (!inquiryName.trim() || !inquiryContact.trim()) return;
     
-    // Log inquiry search trigger
     if (selectedProduct) {
       onSearchLog(`Inquiry: ${selectedProduct.name}`, selectedProduct.category);
       triggerSearchFetch();
@@ -209,7 +191,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
 
     setInquirySubmitted(true);
     setTimeout(() => {
-      // Reset form
       setIsInquiring(false);
       setInquirySubmitted(false);
       setInquiryName("");
@@ -233,10 +214,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     }
   };
 
-  // We don't have real product photos in the system. Rather than fake one,
-  // each item's real iconName field (already set per category when the
-  // inventory was built — Wine, Martini, Beer, Zap, Cookie, CupSoda,
-  // Package, Droplet, Coffee) maps to an honest generic icon instead.
   const getCategoryIcon = (iconName?: string) => {
     switch (iconName) {
       case "Wine": return Wine;
@@ -264,11 +241,9 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           className="h-36 md:h-48 w-auto mx-auto"
         />
         <p className="text-[#F4F1ED]/70 text-base md:text-lg leading-relaxed font-light uppercase">
-          Welcome to <span className="font-medium text-[#F4F1ED]">Calloway Market</span> in Bakersfield, CA — liquor, beer, RTD, soda, water, sports & energy drinks, snacks, and more. To offer on-demand convenience and delivery, we have partnered with DoorDash. Selecting any item will redirect you to our DoorDash storefront to place your order.
+          Welcome to <span className="font-medium text-[#F4F1ED]">Calloway Market</span> in Bakersfield, CA — liquor, beer, RTD, soda, water, sports & energy drinks, snacks, and more. To offer on-demand convenience and delivery, we have partnered with DoorDash and Grubhub. Selecting any item will redirect you to place your order.
         </p>
 
-        {/* 10% off email signup - real signup, real unique code per person,
-            stored server-side for future promo emails. */}
         <div className="max-w-md mx-auto bg-[#121110] border border-[#C4A484]/30 p-6 text-left">
           {signupStatus === "success" ? (
             <div className="text-center space-y-2">
@@ -317,14 +292,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </div>
       </div>
 
-      {/* Featured This Month — manually curated by the merchant via the
-          star toggle in the dashboard. Not based on sales data or any
-          algorithm; only shows when at least one item is actually marked
-          featured, so it never displays an empty or placeholder section.
-          FIX: rebuilt larger (3 per row instead of 4, more padding) per
-          request, plus a real icon-based image area using each product's
-          actual category icon — we don't have real product photos, so
-          this uses an honest generic icon rather than a fake photo. */}
       {products.some((p) => p.featured) && (
         <div className="space-y-5">
           <div className="flex items-center gap-2">
@@ -341,9 +308,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                   onClick={() => setSelectedProduct(product)}
                   className="relative bg-[#121110] border-2 border-[#C4A484] hover:border-[#F4F1ED] cursor-pointer transition group overflow-hidden shadow-[0_0_24px_rgba(196,164,132,0.25)]"
                 >
-                  {/* Bold diagonal SPECIAL ribbon - clipped to the card's
-                      overflow-hidden container so it never spills outside
-                      the card's own bounds at any screen size. */}
                   <div className="absolute top-0 right-0 z-10 overflow-hidden w-28 h-28 pointer-events-none">
                     <div className="absolute top-[18px] right-[-32px] w-[150px] rotate-45 bg-[#C4A484] text-black text-center py-1 text-[11px] font-bold uppercase tracking-widest shadow-lg">
                       Special
@@ -376,7 +340,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </div>
       )}
 
-      {/* Filter and Search Bar - Editorial Box */}
       <div className="bg-[#121110] border border-[#F4F1ED]/10 p-6 md:p-8 space-y-8 shadow-2xl">
         <form onSubmit={handleSearchSubmit} className="flex flex-col md:flex-row gap-4">
           <div className="relative flex-1">
@@ -397,7 +360,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           </button>
         </form>
 
-        {/* Category Scroll */}
         <div className="space-y-3 pt-2 border-t border-[#F4F1ED]/5">
           <div className="flex items-center gap-2 text-[11px] font-bold text-[#C4A484] uppercase tracking-[0.12em]">
             <SlidersHorizontal className="w-3.5 h-3.5" />
@@ -406,10 +368,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           <div className="flex flex-wrap gap-2">
             {categories.map((category) => {
               const getCategoryEmoji = (cat: string) => {
-                // FIX: previously only matched the old fictional category
-                // names (Whiskey, Tequila, Craft Beer...) — none of which
-                // exist in your real inventory. Updated to match your
-                // actual department/subcategory names.
                 switch (cat.toLowerCase()) {
                   case "liquor": return "🥃";
                   case "wine": return "🍷";
@@ -441,10 +399,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
             })}
           </div>
 
-          {/* NEW: subcategory filters (e.g. Whiskey & Bourbon, Tequila &
-              Mezcal, Gin, Vodka within Liquor) — only shown once a real
-              top-level category is selected and it actually has
-              subcategories to filter by. */}
           {subcategories.length > 1 && (
             <div className="flex flex-wrap gap-2 pt-1">
               {subcategories.map((sub) => (
@@ -465,8 +419,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </div>
       </div>
 
-
-      {/* Product Grid */}
       {isLoading ? (
         <div className="flex flex-col items-center justify-center py-28 space-y-4">
           <div className="w-8 h-8 border-2 border-[#C4A484] border-t-transparent rounded-full animate-spin"></div>
@@ -503,20 +455,14 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
               onClick={() => setSelectedProduct(product)}
               className="bg-[#121110] border border-[#F4F1ED]/10 hover:border-[#C4A484]/30 transition duration-300 group flex flex-col justify-between overflow-hidden cursor-pointer shadow-xl relative"
             >
-              {/* Product Visual Top */}
               <div className="p-6 pb-0">
                 <div className={`h-44 bg-gradient-to-br ${product.imageColor} p-4 flex flex-col justify-between relative text-white overflow-hidden`}>
-                  {/* Absolute subtle background pattern */}
                   <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]"></div>
                   
                   <div className="flex justify-between items-start z-10">
                     <span className="text-[10px] font-bold tracking-[0.15em] uppercase bg-black/40 backdrop-blur-md px-2.5 py-1 rounded-none text-[#F4F1ED] border border-white/10">
                       {product.category}
                     </span>
-                    {/* FIX: previously always showed product.origin.split(",")[0]
-                        — but real inventory items have origin: "" (most
-                        snacks/drinks have no meaningful "origin"), so this
-                        only renders when there's real data to show. */}
                     {product.origin && (
                       <span className="text-xs font-medium text-amber-200/90 flex items-center gap-1">
                         <MapPin className="w-3 h-3 text-[#C4A484]" /> {product.origin.split(",")[0]}
@@ -524,11 +470,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                     )}
                   </div>
                   
-                  {/* Dynamic Silhouette representing item.
-                      FIX: previously checked product.category === "Snack" / "Soda"
-                      (singular, from the old fictional category list) — your
-                      real departments are "Snacks" and "Soda" (plural/exact),
-                      so these checks never actually matched real data. */}
                   {product.category === "Snacks" ? (
                     <div className="h-24 w-16 mx-auto bg-white/10 backdrop-blur-sm border border-white/20 rounded-t-md rounded-b-xl shadow-xl flex flex-col items-center justify-center group-hover:scale-105 transition-transform duration-300 relative z-10">
                       <div className="w-full h-1.5 bg-white/20 border-b border-white/10 mb-1"></div>
@@ -559,7 +500,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                 </div>
               </div>
 
-              {/* Product Info */}
               <div className="p-6 flex-1 flex flex-col justify-between space-y-5">
                 <div className="space-y-2">
                   <h3 className="text-xl font-serif text-[#F4F1ED] group-hover:text-[#C4A484] transition-colors line-clamp-1">
@@ -573,11 +513,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                 </div>
 
                 <div className="space-y-4 pt-2">
-                  {/* Tasting notes previews — only render if real notes exist.
-                      FIX: real inventory items have tastingNotes: [] (we
-                      don't have real tasting-note data for a bag of chips
-                      or a 2L Pepsi), so this section is hidden when empty
-                      rather than rendering a blank row of pills. */}
                   {product.tastingNotes.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {product.tastingNotes.slice(0, 3).map((note, idx) => (
@@ -593,12 +528,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                     </div>
                   )}
 
-                  {/* FIX: previously showed the DoorDash price (with the
-                      1.333x markup) on the website itself. Switched to show
-                      the real in-store register price instead, per request.
-                      Falls back to the DoorDash price only if storePrice is
-                      somehow missing for an item, so nothing silently shows
-                      blank — but storePrice is the real intended value. */}
                   <div className="flex items-baseline justify-between">
                     {(product.storePrice ?? product.price) ? (
                       <span className="text-2xl font-serif text-[#F4F1ED]">
@@ -614,9 +543,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                   <div className="flex items-center justify-between border-t border-[#F4F1ED]/10 pt-4">
                     <div className="flex flex-col">
                       <span className="text-xs font-mono text-[#F4F1ED]/50">
-                        {/* FIX: same singular/plural category mismatch as
-                            above, plus product.abv is now "" for most real
-                            items rather than a real ABV value. */}
                         {product.size}
                         {product.size ? " • " : ""}
                         {product.category === "Snacks" || product.category === "Soda" || product.category === "Water" || !product.abv
@@ -635,16 +561,27 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-[#F4F1ED]/10 flex items-center justify-between text-xs gap-2">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation(); // Prevent opening modal
-                      handleAddToDoorDash(product);
-                    }}
-                    className="px-3.5 py-2 bg-[#FF3008] hover:bg-[#E52B07] text-white text-[9.5px] uppercase tracking-wider font-extrabold transition cursor-pointer border border-[#FF3008]/20 flex items-center gap-1 shadow-md"
-                  >
-                    <span>🛵</span> Order on DoorDash
-                  </button>
+                <div className="pt-3 border-t border-[#F4F1ED]/10 flex items-center justify-between text-xs gap-2 flex-wrap">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAddToDoorDash(product);
+                      }}
+                      className="px-3 py-2 bg-[#FF3008] hover:bg-[#E52B07] text-white text-[9px] uppercase tracking-wider font-extrabold transition cursor-pointer border border-[#FF3008]/20 flex items-center gap-1 shadow-md"
+                    >
+                      <span>🛵</span> DoorDash
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAddToGrubhub(product);
+                      }}
+                      className="px-3 py-2 bg-[#F63440] hover:bg-[#d92b36] text-white text-[9px] uppercase tracking-wider font-extrabold transition cursor-pointer border border-[#F63440]/20 flex items-center gap-1 shadow-md"
+                    >
+                      <span>🍔</span> Grubhub
+                    </button>
+                  </div>
                   <span className="text-[#F4F1ED]/40 flex items-center group-hover:text-[#F4F1ED] transition-colors uppercase tracking-widest text-[9px] font-bold">
                     View Specs <ChevronRight className="w-3 h-3 ml-0.5 text-[#C4A484]" />
                   </span>
@@ -655,7 +592,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </div>
       )}
 
-      {/* Product Details & Inquiry Modal */}
       <AnimatePresence>
         {selectedProduct && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto">
@@ -666,7 +602,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
               className="bg-[#121110] border border-[#F4F1ED]/10 w-full max-w-2xl overflow-hidden shadow-2xl my-8"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Cover Banner */}
               <div className={`bg-gradient-to-br ${selectedProduct.imageColor} text-white p-8 relative`}>
                 <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]"></div>
                 
@@ -694,11 +629,9 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                 </div>
               </div>
 
-              {/* Modal Body */}
               <div className="p-6 md:p-8 space-y-6 max-h-[60vh] overflow-y-auto">
                 {!isInquiring ? (
                   <>
-                    {/* Tasting Specs */}
                     <div className="space-y-6">
                       <div>
                         <h4 className="text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-2">The Story</h4>
@@ -706,7 +639,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
-                        {/* Tasting Notes */}
                         <div className="bg-[#0C0B0A] border border-[#F4F1ED]/10 p-5">
                           <h4 className="text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-3">Tasting Profile</h4>
                           <div className="flex flex-wrap gap-1.5">
@@ -718,7 +650,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                           </div>
                         </div>
 
-                        {/* Pairing Card */}
                         <div className="bg-[#0C0B0A] border border-[#F4F1ED]/10 p-5">
                           <h4 className="text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-3">Epicurean Pairing</h4>
                           <p className="text-[#F4F1ED]/80 text-xs leading-relaxed italic">
@@ -728,13 +659,12 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                       </div>
                     </div>
 
-                    {/* DoorDash Integration Banner */}
                     <div className="bg-[#0C0B0A] border border-amber-950/40 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
-                        <h4 className="text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-1.5">DoorDash Delivery Option</h4>
+                        <h4 className="text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-1.5">Delivery Options</h4>
                         <div className="flex items-center gap-3">
                           <span className="text-sm font-semibold text-[#F4F1ED]">
-                            Available for Courier Delivery
+                            Available via DoorDash or Grubhub
                           </span>
                         </div>
                       </div>
@@ -743,27 +673,30 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                       </span>
                     </div>
 
-                    {/* Stock Status Notification Banner */}
                     <div className="flex items-start gap-3 bg-[#0C0B0A] border border-[#F4F1ED]/10 p-4">
                       <Info className="w-5 h-5 text-[#C4A484] shrink-0 mt-0.5" />
                       <div className="text-xs text-[#F4F1ED]/80 space-y-1">
                         <span className="font-bold text-[#F4F1ED] block uppercase tracking-wider">Availability Status: {selectedProduct.stockStatus}</span>
                         <p className="font-light leading-relaxed">
-                          This curated selection is carried at Calloway Market on Calloway Drive. For immediate checkout and courier delivery to your doorstep, please order directly through our official DoorDash shop.
+                          This item is carried at Calloway Market on Calloway Drive. For immediate checkout and courier delivery to your doorstep, please order directly through DoorDash or Grubhub.
                         </p>
                       </div>
                     </div>
 
-                    {/* Footer Actions */}
                     <div className="pt-6 border-t border-[#F4F1ED]/10 flex flex-col md:flex-row gap-3">
                       <button
                         type="button"
-                        onClick={() => {
-                          handleAddToDoorDash(selectedProduct);
-                        }}
+                        onClick={() => handleAddToDoorDash(selectedProduct)}
                         className="flex-1 px-6 py-4 bg-[#FF3008] text-white hover:bg-[#E52B07] border border-[#FF3008]/30 font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer rounded-none"
                       >
-                        🛵 Order on DoorDash & Deliver
+                        🛵 Order on DoorDash
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAddToGrubhub(selectedProduct)}
+                        className="flex-1 px-6 py-4 bg-[#F63440] text-white hover:bg-[#d92b36] border border-[#F63440]/30 font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer rounded-none"
+                      >
+                        🍔 Order on Grubhub
                       </button>
                       <button
                         onClick={() => setIsInquiring(true)}
@@ -782,7 +715,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                     </div>
                   </>
                 ) : (
-                  /* Inquiry Flow */
                   <form onSubmit={handleInquirySubmit} className="space-y-6">
                     {inquirySubmitted ? (
                       <motion.div
@@ -800,15 +732,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                           </p>
                         </div>
                         <p className="text-[10px] uppercase tracking-widest text-[#C4A484] bg-[#0C0B0A] border border-[#F4F1ED]/10 px-4 py-3 max-w-sm mx-auto font-light">
-                          {/* FIX: this used to promise "A sommelier will contact you
-                              directly" and show a randomly-generated fake "client
-                              file number" — but submitting this form never actually
-                              notifies anyone or stores contact info for follow-up.
-                              For real product, build a real notification (e.g. email
-                              the merchant, or save to a real database) before
-                              promising a callback. For now: order on DoorDash for
-                              real-time stock and pricing. */}
-                          For immediate ordering, please use the DoorDash link below — inquiries here are not yet monitored for callbacks.
+                          For immediate ordering, please use the DoorDash or Grubhub links — inquiries here are not yet monitored for callbacks.
                         </p>
                       </motion.div>
                     ) : (
@@ -886,10 +810,26 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         )}
       </AnimatePresence>
 
+      {/* Floating Grubhub Storefront Button */}
+      <div className="fixed bottom-24 right-6 z-40">
+        <a
+          href={getGrubhubUrl()}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="relative bg-[#F63440] hover:bg-[#d92b36] text-white p-4 rounded-full shadow-2xl hover:scale-105 transition active:scale-95 group cursor-pointer flex items-center justify-center border border-white/10"
+          title="Visit Calloway Market on Grubhub"
+        >
+          <ShoppingBag className="w-6 h-6 text-white" />
+          <span className="absolute right-14 bg-[#121110] border border-[#F4F1ED]/10 text-[#C4A484] text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-sm shadow-xl hidden md:block whitespace-nowrap">
+            Open Grubhub Shop
+          </span>
+        </a>
+      </div>
+
       {/* Floating DoorDash Storefront Button */}
       <div className="fixed bottom-6 right-6 z-40">
         <a
-          href={DOORDASH_URL}
+          href={getDoorDashUrl()}
           target="_blank"
           rel="noopener noreferrer"
           className="relative bg-[#FF3008] hover:bg-[#E52B07] text-white p-4 rounded-full shadow-2xl hover:scale-105 transition active:scale-95 group cursor-pointer flex items-center justify-center border border-white/10"
@@ -902,7 +842,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </a>
       </div>
 
-      {/* DoorDash Redirect Overlay Modal */}
       <AnimatePresence>
         {isRedirectModalOpen && redirectingProduct && (
           <div className="fixed inset-0 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 z-55" style={{ zIndex: 9999 }}>
@@ -936,7 +875,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
 
               <div className="space-y-3 pt-2">
                 <a
-                  href={DOORDASH_URL}
+                  href={getDoorDashUrl(redirectingProduct)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="w-full py-3 bg-[#FF3008] hover:bg-[#E52B07] text-white font-bold text-xs uppercase tracking-widest transition flex items-center justify-center gap-2 shadow-lg"
