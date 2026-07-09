@@ -25,29 +25,20 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     return new Date(isoString).toLocaleDateString();
   };
 
-  // Store/restaurant identifiers used to build per-product deep links.
+  // Store/restaurant identifiers.
   const DOORDASH_STORE_ID = "34675059";
   const GRUBHUB_RESTAURANT_SLUG = "calloway-market-2816-calloway-dr-bakersfield";
   const GRUBHUB_RESTAURANT_ID = "6330952";
 
-  // DoorDash supports a documented search deep-link per store, so each
-  // product can link straight to a pre-filled search for its own name.
-   const getDoorDashUrl = (product?: Product) => {
+  // Neither DoorDash nor Grubhub publicly support per-item search deep
+  // links from an external site — both buttons always open the real
+  // storefront/restaurant page, regardless of which product was clicked.
+  const getDoorDashUrl = (product?: Product) => {
     return `https://www.doordash.com/convenience/store/${DOORDASH_STORE_ID}?event_type=autocomplete&pickup=false`;
   };
 
   const getGrubhubUrl = (product?: Product) => {
     return `https://www.grubhub.com/restaurant/${GRUBHUB_RESTAURANT_SLUG}/${GRUBHUB_RESTAURANT_ID}`;
-  };
-
-
-  // Grubhub doesn't publicly document a search deep-link the way DoorDash
-  // does. This appends a query param that may or may not pre-filter
-  // results — if it doesn't, it still opens the correct restaurant page.
-  const getGrubhubUrl = (product?: Product) => {
-    const base = `https://www.grubhub.com/restaurant/${GRUBHUB_RESTAURANT_SLUG}/${GRUBHUB_RESTAURANT_ID}`;
-    if (!product) return base;
-    return `${base}?search=${encodeURIComponent(product.name)}`;
   };
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -233,7 +224,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
 
   return (
     <div className="space-y-12" id="customer-view">
-      {/* Editorial Header */}
       <div className="text-center max-w-3xl mx-auto space-y-6 py-8">
         <span className="text-[13px] md:text-sm font-bold tracking-[0.15em] text-[#C4A484] uppercase block">
           Liquor, Beer &amp; Everyday Essentials
@@ -813,7 +803,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         )}
       </AnimatePresence>
 
-      {/* Floating Grubhub Storefront Button */}
       <div className="fixed bottom-24 right-6 z-40">
         <a
           href={getGrubhubUrl()}
@@ -829,7 +818,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </a>
       </div>
 
-      {/* Floating DoorDash Storefront Button */}
       <div className="fixed bottom-6 right-6 z-40">
         <a
           href={getDoorDashUrl()}
