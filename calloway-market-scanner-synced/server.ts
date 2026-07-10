@@ -413,16 +413,16 @@ app.post("/api/email-signup", async (req, res) => {
     }
     if (insertError) throw insertError;
 
-    // Attempt to send the coupon email, capped at 5 seconds. Serverless
-    // functions don't reliably run "fire and forget" code after the
-    // response is sent, so this must be awaited — but capped so a
-    // slow/unreachable Resend API can't freeze the whole request like it
-    // did before.
+    // Attempt to send the coupon email, capped at 5 seconds. We now check
+    // the actual HTTP response status — fetch() only throws on network
+    // failures, NOT on a rejected request (e.g. bad API key, unverified
+    // sender). Without this check, a rejected email would silently look
+    // like a success with nothing logged and nothing in Resend's records.
     if (process.env.RESEND_API_KEY) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
       try {
-        await fetch("https://api.resend.com/emails", {
+        const emailRes = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
@@ -445,6 +445,12 @@ app.post("/api/email-signup", async (req, res) => {
           }),
           signal: controller.signal,
         });
+        if (!emailRes.ok) {
+          const errBody = await emailRes.text();
+          console.error(`Resend API rejected the email (status ${emailRes.status}):`, errBody);
+        } else {
+          console.log("Coupon email sent successfully via Resend.");
+        }
       } catch (emailErr) {
         console.error("Failed to send coupon email (code was still generated and saved):", emailErr);
       } finally {
