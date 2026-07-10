@@ -10,27 +10,11 @@ import { SearchQuery, Product } from "./src/types.js";
 dotenv.config();
 
 const app = express();
-// Render (and most real hosts) assign their own port via the PORT env var
-// and expect the app to listen on it — hardcoding 3000 would break this.
-// Falls back to 3000 for local development where no PORT is set.
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-// ---------------------------------------------------------------------------
-// PERSISTENCE FIX (v2 — real database): previously, currentProducts and
-// searchQueries lived only in a plain JS variable in server memory, then
-// briefly in a JSON file on disk. Both approaches fail on serverless hosts
-// like Vercel, which don't guarantee a persistent filesystem between
-// requests. This now reads/writes a real Supabase Postgres database
-// instead — the same project already used by the inventory scanner tool.
-//
-// Requires SUPABASE_URL and SUPABASE_SECRET_KEY to be set as real
-// environment variables (set in Vercel's Project Settings → Environment
-// Variables for production, or in a local .env file for development —
-// never commit the secret key to source control).
-// ---------------------------------------------------------------------------
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
 
@@ -45,23 +29,9 @@ if (!supabase) {
   );
 }
 
-// In-memory fallback only used if Supabase env vars are missing entirely,
-// so the server can still start (e.g. for quick local testing) rather than
-// crashing — but this fallback does NOT persist, by design, to make the
-// missing configuration obvious rather than silently "working" with data
-// that disappears on the next restart.
 let memoryProductsFallback: Product[] = [...PRODUCTS];
 let memorySearchesFallback: SearchQuery[] = [];
 
-// FIX (real, confirmed bug — not speculative): products could silently
-// disappear after Render's free tier spun the service down (15 min of no
-// traffic) and a fresh instance's Supabase load happened to hiccup at
-// exactly the wrong moment. The OLD code would silently fall back to the
-// 898-item built-in seed list in that case, and — critically — a merchant
-// upload immediately after would then PREPEND onto that wrong 898-item
-// base and SAVE it back to Supabase, permanently overwriting the real,
-// larger inventory. This is now tracked explicitly with a flag so an
-// upload can refuse to save if we're not confident we have the real data.
 let lastProductLoadWasReliable = false;
 
 async function loadProductsFromDisk(): Promise<Product[]> {
@@ -70,11 +40,6 @@ async function loadProductsFromDisk(): Promise<Product[]> {
     return memoryProductsFallback;
   }
   try {
-    // FIX: Supabase caps every .select() at a max-rows limit (1000 by
-    // default) regardless of how many rows actually exist. A single
-    // .select() here was silently truncating real inventory down to
-    // 1000 items. This now pages through in batches of 1000 until every
-    // row is fetched, so the real count is never silently capped again.
     const allRows: { data: Product }[] = [];
     const pageSize = 1000;
     let from = 0;
@@ -96,8 +61,6 @@ async function loadProductsFromDisk(): Promise<Product[]> {
       lastProductLoadWasReliable = true;
       return data.map((row) => row.data as Product);
     }
-    // Genuinely empty database (e.g. real first run) is a reliable result
-    // too — it's just honestly zero, not a connection failure.
     lastProductLoadWasReliable = true;
   } catch (err) {
     console.error("Failed to load products from Supabase, falling back to built-in seed data:", err);
@@ -114,13 +77,10 @@ async function saveProductsToDisk(products: Product[]): Promise<void> {
     return;
   }
   try {
-    // Replace the full product set: clear existing rows, then insert current state.
-    // Simpler and safer than diffing for a catalog this size, and matches
-    // the same "replace whole list" semantics the old file-based version had.
     const { error: deleteError } = await supabase
       .from("website_products")
       .delete()
-      .neq("id", "__never_matches__"); // delete-all idiom: a condition that's always true
+      .neq("id", "__never_matches__");
     if (deleteError) throw deleteError;
 
     if (products.length > 0) {
@@ -166,10 +126,6 @@ async function saveSearchesToDisk(searches: SearchQuery[]): Promise<void> {
     console.warn("Supabase not configured — search history will NOT persist across restarts.");
     return;
   }
-  // Only the newest entry actually needs writing on each call (see call
-  // sites below) — full-list replacement isn't necessary here since search
-  // history is append-only, unlike the product catalog which gets replaced
-  // wholesale on upload.
   try {
     const newest = searches[0];
     if (!newest) return;
@@ -188,24 +144,10 @@ async function saveSearchesToDisk(searches: SearchQuery[]): Promise<void> {
   }
 }
 
-
-// ---------------------------------------------------------------------------
-// SECURITY FIX: Real server-side merchant authentication.
-// Previously, the "passcode" only hid a button in the browser UI — the actual
-// API endpoints below (product upload, delete-all, AI insights) had ZERO
-// protection, so anyone who found the URL could wipe the inventory with a
-// single request, passcode or not.
-//
-// This middleware now requires a secret key on every merchant-only request.
-// Set MERCHANT_API_KEY as a real secret (not committed to code) in your
-// hosting platform's Secrets/Environment panel — never hardcode it here.
-// ---------------------------------------------------------------------------
 const MERCHANT_API_KEY = process.env.MERCHANT_API_KEY;
 
 function requireMerchantAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   if (!MERCHANT_API_KEY) {
-    // Fail safe: if no key is configured at all, block merchant actions
-    // entirely rather than silently allowing public access.
     return res.status(503).json({
       error: "Merchant authentication is not configured on this server. Set MERCHANT_API_KEY in your hosting secrets before using merchant features.",
     });
@@ -217,7 +159,6 @@ function requireMerchantAuth(req: express.Request, res: express.Response, next: 
   next();
 }
 
-// Initialize Gemini Client with User-Agent header for telemetry
 let ai: GoogleGenAI | null = null;
 if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY") {
   ai = new GoogleGenAI({
@@ -233,33 +174,10 @@ if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_
   console.log("GEMINI_API_KEY not set. Server will run with dynamic heuristic-based fallbacks.");
 }
 
-// In-memory data store for local search queries.
-// FIX: this used to be pre-seeded with 15 entirely fictional search entries
-// (fake queries like "Macallan 12" and "Clase Azul Plata" that aren't even
-// in your real inventory, fake neighborhoods, fake timestamps) designed to
-// make the dashboard look populated with real activity from day one. That's
-// misleading — it would show what looks like real customer behavior data
-// that never actually happened. Starts empty here and is populated for real
-// from Supabase inside startServer() below, before the app starts listening.
 let searchQueries: SearchQuery[] = [];
 
-// Helper array of neighborhoods for random assignment
-// REMOVED: NEIGHBORHOODS fake-data array (no longer used — see /api/searches fix above)
-
-// PERSISTENCE FIX: previously always reset to the 17 fake demo products on
-// every server restart. Starts with the built-in seed data here as a safe
-// synchronous default, then is replaced with whatever's actually saved in
-// Supabase inside startServer() below, before the app starts listening —
-// real merchant-uploaded inventory survives restarts once that load completes.
 let currentProducts: Product[] = [...PRODUCTS];
 
-// Brand extraction helper for analytics tracking.
-// FIX: this list used to contain only fictional luxury spirits (Macallan,
-// Dom Perignon, Krug, Yamazaki) that aren't in your real inventory at all —
-// meaning real customer searches for your actual top sellers (Modelo,
-// Pepsi, Jack Daniel's, Monster, etc.) would never be recognized as a
-// "brand" by this function. Replaced with real brands pulled from your
-// verified 898-item inventory.
 function extractBrand(query: string): string {
   const queryLower = query.toLowerCase();
   const knownBrands = [
@@ -275,7 +193,6 @@ function extractBrand(query: string): string {
       return brand;
     }
   }
-  // If no known brand matches, use the first word if it isn't generic
   const firstWord = query.trim().split(" ")[0];
   const genericWords = [
     "tequila", "whiskey", "vodka", "gin", "beer", "wine", "champagne",
@@ -289,17 +206,6 @@ function extractBrand(query: string): string {
   return "Other / Unbranded";
 }
 
-// API Endpoints
-
-// 1. Get all products
-// FIX: this used to just return whatever was cached in memory
-// (currentProducts) from whenever this particular serverless instance last
-// loaded it. On Vercel, multiple instances can be running simultaneously,
-// each with its own possibly-stale in-memory copy — so different visitors
-// could see different item counts depending on which instance handled
-// their request. Now always re-reads from Supabase first, so every request
-// gets the real current data. Falls back to the in-memory copy only if
-// Supabase is unreachable, so the site still responds instead of erroring.
 app.get("/api/products", async (req, res) => {
   try {
     if (supabase) {
@@ -320,9 +226,8 @@ app.get("/api/products", async (req, res) => {
   res.json(currentProducts);
 });
 
-// 1b. Add/Upload new product or bulk products
 app.post("/api/products", requireMerchantAuth, async (req, res) => {
-  const { products } = req.body; // Can be an array or a single product
+  const { products } = req.body;
   
   if (!products) {
     return res.status(400).json({ error: "No product data provided." });
@@ -330,12 +235,6 @@ app.post("/api/products", requireMerchantAuth, async (req, res) => {
 
   const itemsToAdd = Array.isArray(products) ? products : [products];
   
-  // Validate and sanitize products.
-  // FIX: previously missing fields were filled with confident-sounding
-  // fabricated marketing copy (fake ABV "40%", fake tasting notes "Premium
-  // Select", fake food pairing "Assorted charcuterie") even for products
-  // where none of that applies (e.g. a bag of chips). Defaults now clearly
-  // signal missing data instead of inventing believable-but-false details.
   const sanitizedItems = itemsToAdd.map((p, idx) => {
     return {
       id: p.id || `uploaded-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`,
@@ -356,12 +255,6 @@ app.post("/api/products", requireMerchantAuth, async (req, res) => {
     };
   });
 
-  // FIX: refuse to save if we're not confident currentProducts reflects
-  // real Supabase data right now. Without this check, an upload landing
-  // on a server instance that had a Supabase hiccup at startup would
-  // silently overwrite your real inventory with the small built-in seed
-  // list plus whatever was just uploaded — this is the exact bug that
-  // caused products to "disappear" overnight.
   if (!lastProductLoadWasReliable) {
     console.error("Refusing to save upload: product data was not reliably loaded from Supabase for this server instance. Retrying load before saving.");
     currentProducts = await loadProductsFromDisk();
@@ -372,27 +265,20 @@ app.post("/api/products", requireMerchantAuth, async (req, res) => {
     }
   }
 
-  currentProducts = [...sanitizedItems, ...currentProducts]; // prepend new items
-  await saveProductsToDisk(currentProducts); // PERSISTENCE FIX: survive restarts
+  currentProducts = [...sanitizedItems, ...currentProducts];
+  await saveProductsToDisk(currentProducts);
   res.json({ success: true, count: sanitizedItems.length, products: sanitizedItems });
 });
 
-// 1c. Delete all products (clear inventory)
 app.delete("/api/products", requireMerchantAuth, async (req, res) => {
   currentProducts = [];
-  await saveProductsToDisk(currentProducts); // PERSISTENCE FIX: survive restarts
+  await saveProductsToDisk(currentProducts);
   res.json({ success: true, message: "All inventory has been deleted successfully." });
 });
 
-// 1d. Delete a single product by ID
 app.delete("/api/products/:id", requireMerchantAuth, async (req, res) => {
   const { id } = req.params;
 
-  // Same protection as the upload endpoint above: refuse to save a
-  // deletion if we're not confident currentProducts reflects real
-  // Supabase data right now, since saving here would otherwise risk
-  // permanently shrinking the real inventory down to the small built-in
-  // fallback list minus one item.
   if (!lastProductLoadWasReliable) {
     currentProducts = await loadProductsFromDisk();
     if (!lastProductLoadWasReliable) {
@@ -403,20 +289,13 @@ app.delete("/api/products/:id", requireMerchantAuth, async (req, res) => {
   }
 
   currentProducts = currentProducts.filter((p) => p.id !== id);
-  await saveProductsToDisk(currentProducts); // PERSISTENCE FIX: survive restarts
+  await saveProductsToDisk(currentProducts);
   res.json({ success: true, message: `Product with ID ${id} deleted.` });
 });
 
-// 1e. Toggle a single product's stock status (In Stock <-> Temporarily Out of Stock)
 app.patch("/api/products/:id/stock", requireMerchantAuth, async (req, res) => {
   const { id } = req.params;
 
-  // FIX: this endpoint saves the ENTIRE currentProducts list back to
-  // Supabase on every toggle. If this server instance's in-memory copy
-  // was stale or incomplete (e.g. right after a cold start with a
-  // Supabase hiccup), a single innocent stock toggle would silently
-  // overwrite the real inventory with a smaller one. Same protection as
-  // the upload/delete endpoints above.
   if (!lastProductLoadWasReliable) {
     currentProducts = await loadProductsFromDisk();
     if (!lastProductLoadWasReliable) {
@@ -430,18 +309,12 @@ app.patch("/api/products/:id/stock", requireMerchantAuth, async (req, res) => {
   if (!product) {
     return res.status(404).json({ error: `Product with ID ${id} not found.` });
   }
-  // Simple two-way toggle as requested — if it's currently anything other
-  // than "In Stock" (Limited Stock, Special Order Only, etc.), treat the
-  // toggle as bringing it back into stock; otherwise mark it out.
   product.stockStatus =
     product.stockStatus === "In Stock" ? "Temporarily Out of Stock" : "In Stock";
-  await saveProductsToDisk(currentProducts); // PERSISTENCE FIX: survive restarts
+  await saveProductsToDisk(currentProducts);
   res.json({ success: true, id, stockStatus: product.stockStatus });
 });
 
-// 1f. Toggle a single product's "featured" status (shown in the homepage's
-// "Featured This Month" section). Manually curated by the merchant — not
-// based on sales data or any algorithm, per request.
 app.patch("/api/products/:id/featured", requireMerchantAuth, async (req, res) => {
   const { id } = req.params;
 
@@ -459,59 +332,41 @@ app.patch("/api/products/:id/featured", requireMerchantAuth, async (req, res) =>
     return res.status(404).json({ error: `Product with ID ${id} not found.` });
   }
   product.featured = !product.featured;
-  await saveProductsToDisk(currentProducts); // PERSISTENCE FIX: survive restarts
+  await saveProductsToDisk(currentProducts);
   res.json({ success: true, id, featured: product.featured });
 });
 
-// 2. Log a new search query (Customer-facing action)
 app.post("/api/searches", async (req, res) => {
   const { query, category, source } = req.body;
   if (!query || typeof query !== "string") {
     return res.status(400).json({ error: "Search query is required." });
   }
 
-  // FIX: this used to invent a random neighborhood and a random distance
-  // for every real customer search, making fabricated location data look
-  // like genuine analytics. We don't actually have real location data for
-  // on-site searches (that would require real geolocation/IP lookup with
-  // its own privacy considerations, or a Google Search Console
-  // integration for actual Google-originated searches) — so we no longer
-  // invent it. These fields are explicitly marked unavailable instead.
   const newSearch: SearchQuery = {
     id: `s_dyn_${Date.now()}`,
     query: query.trim(),
     category: category || "Unknown",
     timestamp: new Date().toISOString(),
-    distanceMiles: null, // not measured — do not display as if it were real
+    distanceMiles: null,
     neighborhood: "Unknown (location data not yet connected)",
     source: source === "Google Search" ? "Google Search" : "Calloway Website",
   };
 
-  searchQueries.unshift(newSearch); // Add to the front of history
+  searchQueries.unshift(newSearch);
 
-  // Cap history size to prevent memory leaks in the running container
   if (searchQueries.length > 200) {
     searchQueries = searchQueries.slice(0, 200);
   }
 
-  await saveSearchesToDisk(searchQueries); // PERSISTENCE FIX: survive restarts
+  await saveSearchesToDisk(searchQueries);
   res.status(201).json(newSearch);
 });
 
-// 3. Get all searches (Owner-facing action)
 app.get("/api/searches", (req, res) => {
   res.json(searchQueries);
 });
 
-// 3a. Email signup for 10% off coupon. Generates a real unique code per
-// person (not one shared code), stores the email + code in Supabase so it
-// can genuinely be used for future promo emails later — per request, this
-// is meant to build a real customer list, not just hand out a discount.
-// Coupon is shown on-screen immediately; this does NOT send a real email
-// (that requires a verified sending domain, which isn't set up yet).
 function generateCouponCode(): string {
-  // Avoids visually ambiguous characters (0/O, 1/I/L) so codes are easy to
-  // read and type back in at checkout.
   const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
   let code = "";
   for (let i = 0; i < 6; i++) {
@@ -532,9 +387,6 @@ app.post("/api/email-signup", async (req, res) => {
   }
 
   try {
-    // Check if this email already signed up before — return their existing
-    // code rather than generating a new one, so re-submitting the same
-    // email doesn't create duplicate coupons for one person.
     const { data: existing, error: lookupError } = await supabase
       .from("email_signups")
       .select("coupon_code")
@@ -546,8 +398,6 @@ app.post("/api/email-signup", async (req, res) => {
       return res.json({ success: true, couponCode: existing.coupon_code, alreadySignedUp: true });
     }
 
-    // Generate a code, retrying on the rare chance of a collision (unique
-    // constraint in the database is the real safety net here either way).
     let couponCode = generateCouponCode();
     let insertError = null;
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -563,49 +413,52 @@ app.post("/api/email-signup", async (req, res) => {
     }
     if (insertError) throw insertError;
 
-        // Respond immediately so the customer isn't stuck waiting
-    res.json({ success: true, couponCode, alreadySignedUp: false });
-
-    // Send the email in the background — doesn't block the response.
+    // Attempt to send the coupon email, capped at 5 seconds. Serverless
+    // functions don't reliably run "fire and forget" code after the
+    // response is sent, so this must be awaited — but capped so a
+    // slow/unreachable Resend API can't freeze the whole request like it
+    // did before.
     if (process.env.RESEND_API_KEY) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
-      fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from: "Calloway Market <onboarding@resend.dev>",
-          to: normalizedEmail,
-          subject: "Your 10% Off Code — Calloway Market",
-          html: `
-            <div style="font-family: sans-serif; padding: 20px;">
-              <h2>Here's your code!</h2>
-              <p style="font-size: 24px; font-weight: bold; letter-spacing: 2px;">${couponCode}</p>
-              <p>Show this at checkout for 10% off your purchase.</p>
-              <p style="font-size: 12px; color: #666;">
-                One coupon per transaction. Not valid on lottery, lotto tickets, money orders, cigarettes, or tobacco products. Cannot be combined with other promotions or discounts. Must be 21+.
-              </p>
-            </div>
-          `,
-        }),
-        signal: controller.signal,
-      })
-        .catch((emailErr) => {
-          console.error("Failed to send coupon email (code was still generated and saved):", emailErr);
-        })
-        .finally(() => clearTimeout(timeout));
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      try {
+        await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: "Calloway Market <onboarding@resend.dev>",
+            to: normalizedEmail,
+            subject: "Your 10% Off Code — Calloway Market",
+            html: `
+              <div style="font-family: sans-serif; padding: 20px;">
+                <h2>Here's your code!</h2>
+                <p style="font-size: 24px; font-weight: bold; letter-spacing: 2px;">${couponCode}</p>
+                <p>Show this at checkout for 10% off your purchase.</p>
+                <p style="font-size: 12px; color: #666;">
+                  One coupon per transaction. Not valid on lottery, lotto tickets, money orders, cigarettes, or tobacco products. Cannot be combined with other promotions or discounts. Must be 21+.
+                </p>
+              </div>
+            `,
+          }),
+          signal: controller.signal,
+        });
+      } catch (emailErr) {
+        console.error("Failed to send coupon email (code was still generated and saved):", emailErr);
+      } finally {
+        clearTimeout(timeout);
+      }
     }
+
+    res.json({ success: true, couponCode, alreadySignedUp: false });
   } catch (err) {
     console.error("Email signup failed:", err);
     res.status(500).json({ error: "Could not complete signup. Please try again." });
   }
 });
 
-
-// 3b. Proxy endpoint to fetch external Google Sheets CSV exports without CORS blocks
 app.post("/api/proxy-sheet", requireMerchantAuth, async (req, res) => {
   const { url } = req.body;
   if (!url || typeof url !== "string") {
@@ -624,20 +477,15 @@ app.post("/api/proxy-sheet", requireMerchantAuth, async (req, res) => {
   }
 });
 
-// 4. Get compiled analytics summary for dashboard charts
 app.get("/api/analytics/summary", (req, res) => {
-  // Calculate popular categories
   const categoryCounts: Record<string, number> = {};
-  // Calculate trending queries
   const queryCounts: Record<string, { count: number; category: string }> = {};
 
   searchQueries.forEach((q) => {
-    // 1. Category counts
     if (q.category) {
       categoryCounts[q.category] = (categoryCounts[q.category] || 0) + 1;
     }
 
-    // 2. Query counts (normalize)
     const normalizedText = q.query.toLowerCase().trim();
     if (normalizedText.length > 2) {
       if (!queryCounts[normalizedText]) {
@@ -645,12 +493,6 @@ app.get("/api/analytics/summary", (req, res) => {
       }
       queryCounts[normalizedText].count += 1;
     }
-    // FIX: a neighborhood heat-map calculation used to live here, built on
-    // fabricated per-search neighborhood/distance values. Since that data
-    // was never real, the calculation has been removed rather than kept
-    // running on nulls (which would have silently produced NaN results).
-    // If you wire in real location data later (e.g. via Search Console),
-    // this is the place to add a real version of it.
   });
 
   const popularCategories = Object.keys(categoryCounts).map((cat) => ({
@@ -667,13 +509,8 @@ app.get("/api/analytics/summary", (req, res) => {
     .sort((a, b) => b.count - a.count)
     .slice(0, 8);
 
-  // FIX: heatMapData used to be calculated from fabricated per-search
-  // neighborhood/distance values (see /api/searches fix above). Returning
-  // an empty array now — honest about not having real location data yet —
-  // rather than computing it from data that was never real.
   const heatMapData: { neighborhood: string; count: number; averageDistance: number }[] = [];
 
-  // Google Search specific analytics
   const googleCategoryCounts: Record<string, number> = {};
   const googleBrandCounts: Record<string, number> = {};
   const googleSearchQueries = searchQueries.filter((q) => q.source === "Google Search");
@@ -696,7 +533,6 @@ app.get("/api/analytics/summary", (req, res) => {
     value: googleBrandCounts[brand],
   })).sort((a, b) => b.value - a.value);
 
-  // Website specific analytics
   const websiteCategoryCounts: Record<string, number> = {};
   const websiteBrandCounts: Record<string, number> = {};
   const websiteSearchQueries = searchQueries.filter((q) => q.source !== "Google Search");
@@ -731,13 +567,7 @@ app.get("/api/analytics/summary", (req, res) => {
   });
 });
 
-// 5. Generate AI insights from search logs
 app.post("/api/analytics/ai-insights", requireMerchantAuth, async (req, res) => {
-  // FIX: the fallback used to fabricate a confident, specific-sounding
-  // report ("Seven Oaks tequila demand up 15% today", "within 1.5 miles of
-  // Calloway Market") regardless of whether any real search data existed.
-  // That's presenting invented numbers as if they were real findings. The
-  // fallback now honestly reflects how much real data actually exists.
   const getFallbackData = () => {
     const recentQueriesFormatted = searchQueries.slice(0, 40).map((q) => ({
       query: q.query,
@@ -779,7 +609,6 @@ app.post("/api/analytics/ai-insights", requireMerchantAuth, async (req, res) => 
     const fallback = getFallbackData();
 
     if (!ai) {
-      // Graceful fallback if API key is not configured yet
       return res.json({
         insights: fallback.fallbackInsights + "\n\n*Configure a valid GEMINI_API_KEY in the Secrets panel to activate full natural-language AI insights forecasting.*",
         suggestions: fallback.fallbackSuggestions,
@@ -788,7 +617,6 @@ app.post("/api/analytics/ai-insights", requireMerchantAuth, async (req, res) => 
       });
     }
 
-    // Format the recent searches for the prompt
     const recentQueriesFormatted = searchQueries.slice(0, 40).map((q) => ({
       query: q.query,
       category: q.category,
@@ -797,7 +625,6 @@ app.post("/api/analytics/ai-insights", requireMerchantAuth, async (req, res) => 
       timeAgo: `${Math.round((Date.now() - new Date(q.timestamp).getTime()) / (60000))} mins ago`,
     }));
 
-    // Call the actual Gemini API with automatic retry and model fallback
     const executeGenerate = async (modelName: string) => {
       if (!ai) throw new Error("AI client not initialized");
       return await ai.models.generateContent({
@@ -841,24 +668,23 @@ Return your response strictly in JSON format matching this TypeScript schema:
     const modelsToTry = ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
 
     for (const currentModel of modelsToTry) {
-      const attempts = currentModel === "gemini-3.5-flash" ? 3 : 1; // Try primary model up to 3 times, others once
+      const attempts = currentModel === "gemini-3.5-flash" ? 3 : 1;
       for (let attempt = 1; attempt <= attempts; attempt++) {
         try {
           response = await executeGenerate(currentModel);
-          break; // Succeeded! Break the attempt loop.
+          break;
         } catch (err: any) {
           lastError = err;
           const errMsg = err?.message || String(err);
           console.warn(`[AI Insights] Attempt ${attempt} with model ${currentModel} failed: ${errMsg}`);
           if (attempt < attempts) {
-            // Exponential backoff delay (600ms, then 1500ms)
             const delay = attempt === 1 ? 600 : 1500;
             await new Promise((resolve) => setTimeout(resolve, delay));
           }
         }
       }
       if (response) {
-        break; // Succeeded with one of the models, break the model loop.
+        break;
       }
     }
 
@@ -876,35 +702,16 @@ Return your response strictly in JSON format matching this TypeScript schema:
   } catch (error: any) {
     console.warn("Gemini API was temporarily unavailable. Falling back gracefully to heuristics. Error details:", error.message || error);
     
-    // Gracefully handle Gemini API errors (like 503 high demand or 429 rate limit)
-    // Send a beautiful heuristic analysis with an error warning message included at the bottom
     const fallback = getFallbackData();
     res.json({
       insights: fallback.fallbackInsights + `\n\n⚠️ *Note: The Gemini AI Service is currently experiencing extremely high traffic volumes. We have temporarily activated our local backup analytics model to compile your Bakersfield market report instantly.*`,
       suggestions: fallback.fallbackSuggestions,
       generatedAt: new Date().toISOString(),
-      needsApiKey: true, // Mark as true so the UI can show we're on fallback mode
+      needsApiKey: true,
     });
   }
 });
 
-// Configure Vite or Serve Static Production Files
-//
-// DEPLOYMENT FIX: Vercel's zero-config Express support auto-detects an
-// exported `app` (or a port listener) from specific file locations, but
-// does NOT run a custom multi-step build pipeline the way this project's
-// "vite build && esbuild server.ts --bundle ..." command does — it never
-// found a working entry point, which is why /api/products returned 404
-// on the first deploy attempt. Vercel also does not support
-// express.static() for serving built frontend assets at all; static files
-// must live in /public instead, which Vercel serves directly via its CDN.
-//
-// Fix: load real data and, in local development only, start a normal
-// app.listen() server with Vite's dev middleware. In production on
-// Vercel, none of that runs — Vercel itself invokes the exported `app`
-// directly as a Function, and serves /public assets on its own. The
-// build script (see package.json) now also copies the Vite output into
-// /public so Vercel's static serving picks it up correctly.
 let dataLoadedPromise: Promise<void> | null = null;
 
 async function ensureDataLoaded() {
@@ -917,10 +724,6 @@ async function ensureDataLoaded() {
   return dataLoadedPromise;
 }
 
-// Load data on module init for both paths (local dev awaits it before
-// listening; Vercel's cold start will await it via this same promise on
-// the first request to hit any route, since Express middleware below
-// can rely on ensureDataLoaded() having been kicked off already).
 ensureDataLoaded();
 
 app.use(async (req, res, next) => {
@@ -954,18 +757,8 @@ async function startLocalDevServer() {
   });
 }
 
-// Only start a local listener when actually running locally (npm run dev
-// or npm start on your own machine). On Vercel, this file is imported as
-// a module and the exported `app` below is invoked directly per-request —
-// calling app.listen() there would be incorrect and is skipped via this
-// check (Vercel sets VERCEL=1 in its build/runtime environment).
 if (!process.env.VERCEL) {
   startLocalDevServer();
 }
 
-// Required for Vercel's zero-config Express detection: export the app as
-// the module's default export so Vercel can invoke it directly as a
-// Function, without needing custom esbuild bundling — see api/index.ts,
-// which is the actual file Vercel invokes as the Function entry point.
 export default app;
-
