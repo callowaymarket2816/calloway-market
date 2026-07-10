@@ -563,7 +563,7 @@ app.post("/api/email-signup", async (req, res) => {
     }
     if (insertError) throw insertError;
 
-    res.json({ success: true, couponCode, alreadySignedUp: false });
+    // Send the coupon code via email using Resend     if (process.env.RESEND_API_KEY) {       try {         await fetch("https://api.resend.com/emails", {           method: "POST",           headers: {             "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,             "Content-Type": "application/json",           },           body: JSON.stringify({             from: "Calloway Market <onboarding@resend.dev>",             to: normalizedEmail,             subject: "Your 10% Off Code — Calloway Market",             html: `               <div style="font-family: sans-serif; padding: 20px;">                 <h2>Here's your code!</h2>                 <p style="font-size: 24px; font-weight: bold; letter-spacing: 2px;">${couponCode}</p>                 <p>Show this at checkout for 10% off your purchase.</p>                 <p style="font-size: 12px; color: #666;">                   One coupon per transaction. Not valid on lottery, lotto tickets, money orders, cigarettes, or tobacco products. Cannot be combined with other promotions or discounts. Must be 21+.                 </p>               </div>             `,           }),         });       } catch (emailErr) {         console.error("Failed to send coupon email (code was still generated and saved):", emailErr);       }     }
   } catch (err) {
     console.error("Email signup failed:", err);
     res.status(500).json({ error: "Could not complete signup. Please try again." });
