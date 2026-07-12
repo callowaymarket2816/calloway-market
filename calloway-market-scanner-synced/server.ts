@@ -471,7 +471,7 @@ app.post("/api/email-signup", async (req, res) => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            from: "Calloway Market <onboarding@resend.dev>",
+            from: "Calloway Market <from: "Calloway Market <promos@callowaymarket.com>",>",
             to: normalizedEmail,
             subject: "Your 10% Off Code — Calloway Market",
             html: `
