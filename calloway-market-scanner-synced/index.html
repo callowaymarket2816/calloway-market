@@ -3,11 +3,59 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Calloway Market</title>
+    <title>Calloway Market | Liquor, Beer & Convenience Store in Bakersfield, CA</title>
+    <meta name="description" content="Calloway Market is a liquor, beer, RTD, snacks, and convenience store located at 2816 Calloway Dr, Unit 100, Bakersfield, CA 93312. Order for delivery via DoorDash or Grubhub, or visit us in-store. Open daily." />
+
+    <!-- Open Graph tags: control how the site looks when shared on Facebook, iMessage, etc. -->
+    <meta property="og:title" content="Calloway Market | Bakersfield, CA" />
+    <meta property="og:description" content="Liquor, beer, RTD, snacks, and everyday essentials in Bakersfield, CA. Delivery available via DoorDash and Grubhub." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://www.callowaymarket.com/" />
+
+    <!-- Structured data: tells Google this is a real local business, with
+         real address/hours/phone, which helps it show up correctly in
+         local search results and Google Maps listings. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "LiquorStore",
+        "name": "Calloway Market",
+        "image": "https://www.callowaymarket.com/calloway-logo.png",
+        "url": "https://www.callowaymarket.com",
+        "telephone": "+16618296889",
+        "address": {
+          "@type": "PostalAddress",
+          "streetAddress": "2816 Calloway Dr, Unit 100",
+          "addressLocality": "Bakersfield",
+          "addressRegion": "CA",
+          "postalCode": "93312",
+          "addressCountry": "US"
+        },
+        "openingHoursSpecification": [
+          {
+            "@type": "OpeningHoursSpecification",
+            "dayOfWeek": ["Monday", "Tuesday", "Wednesday", "Thursday"],
+            "opens": "06:00",
+            "closes": "23:59"
+          },
+          {
+            "@type": "OpeningHoursSpecification",
+            "dayOfWeek": ["Friday", "Saturday"],
+            "opens": "06:00",
+            "closes": "23:59"
+          },
+          {
+            "@type": "OpeningHoursSpecification",
+            "dayOfWeek": "Sunday",
+            "opens": "07:00",
+            "closes": "23:00"
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
