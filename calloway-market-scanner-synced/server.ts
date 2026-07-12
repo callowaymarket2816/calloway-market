@@ -336,6 +336,50 @@ app.patch("/api/products/:id/featured", requireMerchantAuth, async (req, res) =>
   res.json({ success: true, id, featured: product.featured });
 });
 
+// Edit a single product's price (and store price) without needing to
+// delete and re-add the item.
+app.patch("/api/products/:id/price", requireMerchantAuth, async (req, res) => {
+  const { id } = req.params;
+  const { price, storePrice } = req.body;
+
+  if (price === undefined && storePrice === undefined) {
+    return res.status(400).json({ error: "Provide at least one of: price, storePrice." });
+  }
+
+  if (!lastProductLoadWasReliable) {
+    currentProducts = await loadProductsFromDisk();
+    if (!lastProductLoadWasReliable) {
+      return res.status(503).json({
+        error: "Could not confirm your current inventory is up to date. Please try again in a moment — nothing was changed."
+      });
+    }
+  }
+
+  const product = currentProducts.find((p) => p.id === id);
+  if (!product) {
+    return res.status(404).json({ error: `Product with ID ${id} not found.` });
+  }
+
+  if (price !== undefined) {
+    const parsed = Number(price);
+    if (isNaN(parsed) || parsed < 0) {
+      return res.status(400).json({ error: "Price must be a valid non-negative number." });
+    }
+    product.price = parsed;
+  }
+
+  if (storePrice !== undefined) {
+    const parsed = Number(storePrice);
+    if (isNaN(parsed) || parsed < 0) {
+      return res.status(400).json({ error: "Store price must be a valid non-negative number." });
+    }
+    product.storePrice = parsed;
+  }
+
+  await saveProductsToDisk(currentProducts);
+  res.json({ success: true, id, price: product.price, storePrice: product.storePrice });
+});
+
 app.post("/api/searches", async (req, res) => {
   const { query, category, source } = req.body;
   if (!query || typeof query !== "string") {
@@ -413,14 +457,12 @@ app.post("/api/email-signup", async (req, res) => {
     }
     if (insertError) throw insertError;
 
-    // Attempt to send the coupon email, capped at 5 seconds. We now check
-    // the actual HTTP response status — fetch() only throws on network
-    // failures, NOT on a rejected request (e.g. bad API key, unverified
-    // sender). Without this check, a rejected email would silently look
-    // like a success with nothing logged and nothing in Resend's records.
+    // Send the coupon email. No AbortController/timeout here — a timeout
+    // was likely killing the request to Resend before it completed,
+    // which is why nothing showed up in logs or in Resend's dashboard.
+    // We always log the raw status + body from Resend so the real
+    // outcome is visible every time, regardless of success or failure.
     if (process.env.RESEND_API_KEY) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
       try {
         const emailRes = await fetch("https://api.resend.com/emails", {
           method: "POST",
@@ -443,18 +485,11 @@ app.post("/api/email-signup", async (req, res) => {
               </div>
             `,
           }),
-          signal: controller.signal,
         });
-        if (!emailRes.ok) {
-          const errBody = await emailRes.text();
-          console.error(`Resend API rejected the email (status ${emailRes.status}):`, errBody);
-        } else {
-          console.log("Coupon email sent successfully via Resend.");
-        }
+        const emailBody = await emailRes.text();
+        console.log(`Resend response — status ${emailRes.status}: ${emailBody}`);
       } catch (emailErr) {
         console.error("Failed to send coupon email (code was still generated and saved):", emailErr);
-      } finally {
-        clearTimeout(timeout);
       }
     }
 
