@@ -4,5 +4,11 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/sync-google-searches?secret=calloway8f3k2x9",
+      "schedule": "0 8 * * *"
+    }
   ]
 }
