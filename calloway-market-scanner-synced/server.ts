@@ -159,6 +159,63 @@ function requireMerchantAuth(req: express.Request, res: express.Response, next: 
   next();
 }
 
+// ---------------------------------------------------------------------------
+// LOCATION TRACKING: real distance/neighborhood data for customer searches.
+// Previously this was always "Unknown (location data not yet connected)" —
+// now it's genuinely computed two ways:
+//   1. If the visitor's browser grants GPS location access, we use their
+//      exact coordinates (most accurate) and reverse-geocode them into a
+//      neighborhood name via OpenStreetMap's free Nominatim service.
+//   2. Otherwise, we fall back to estimating location from the visitor's
+//      IP address via ip-api.com's free tier — no permission popup needed,
+//      works automatically, but only accurate to city level.
+// ---------------------------------------------------------------------------
+
+// Approximate coordinates for Calloway Market, 2816 Calloway Dr #100,
+// Bakersfield, CA 93312. Replace with exact geocoded coordinates if you
+// have them, for slightly more accurate distance calculations.
+const STORE_LAT = 35.4094;
+const STORE_LNG = -119.0958;
+
+function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const R = 3958.8; // Earth's radius in miles
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c * 10) / 10;
+}
+
+async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=14`,
+      { headers: { "User-Agent": "CallowayMarketWebsite/1.0 (contact: callowaymarket2816@gmail.com)" } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const addr = data.address || {};
+    return addr.suburb || addr.neighbourhood || addr.city_district || addr.city || addr.town || addr.village || null;
+  } catch {
+    return null;
+  }
+}
+
+async function geolocateIp(ip: string): Promise<{ lat: number; lng: number; city: string } | null> {
+  try {
+    const res = await fetch(`http://ip-api.com/json/${ip}?fields=status,lat,lon,city`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.status !== "success") return null;
+    return { lat: data.lat, lng: data.lon, city: data.city };
+  } catch {
+    return null;
+  }
+}
+
 let ai: GoogleGenAI | null = null;
 if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY") {
   ai = new GoogleGenAI({
@@ -336,8 +393,6 @@ app.patch("/api/products/:id/featured", requireMerchantAuth, async (req, res) =>
   res.json({ success: true, id, featured: product.featured });
 });
 
-// Edit a single product's price (and store price) without needing to
-// delete and re-add the item.
 app.patch("/api/products/:id/price", requireMerchantAuth, async (req, res) => {
   const { id } = req.params;
   const { price, storePrice } = req.body;
@@ -380,10 +435,48 @@ app.patch("/api/products/:id/price", requireMerchantAuth, async (req, res) => {
   res.json({ success: true, id, price: product.price, storePrice: product.storePrice });
 });
 
+// 2. Log a new search query (Customer-facing action). Now captures real
+// location data: browser GPS if granted, otherwise IP-based estimate.
 app.post("/api/searches", async (req, res) => {
-  const { query, category, source } = req.body;
+  const { query, category, source, latitude, longitude } = req.body;
   if (!query || typeof query !== "string") {
     return res.status(400).json({ error: "Search query is required." });
+  }
+
+  let distanceMiles: number | null = null;
+  let neighborhood = "Unknown (location unavailable)";
+
+  try {
+    let lat: number | null = null;
+    let lng: number | null = null;
+
+    if (typeof latitude === "number" && typeof longitude === "number") {
+      lat = latitude;
+      lng = longitude;
+    } else {
+      const forwardedFor = req.headers["x-forwarded-for"];
+      const ip = Array.isArray(forwardedFor)
+        ? forwardedFor[0]
+        : (forwardedFor || req.socket.remoteAddress || "").split(",")[0].trim();
+      if (ip) {
+        const ipLoc = await geolocateIp(ip);
+        if (ipLoc) {
+          lat = ipLoc.lat;
+          lng = ipLoc.lng;
+          neighborhood = ipLoc.city;
+        }
+      }
+    }
+
+    if (lat != null && lng != null) {
+      distanceMiles = haversineMiles(STORE_LAT, STORE_LNG, lat, lng);
+      if (typeof latitude === "number" && typeof longitude === "number") {
+        const place = await reverseGeocode(lat, lng);
+        if (place) neighborhood = place;
+      }
+    }
+  } catch (err) {
+    console.error("Location lookup failed for search log entry:", err);
   }
 
   const newSearch: SearchQuery = {
@@ -391,8 +484,8 @@ app.post("/api/searches", async (req, res) => {
     query: query.trim(),
     category: category || "Unknown",
     timestamp: new Date().toISOString(),
-    distanceMiles: null,
-    neighborhood: "Unknown (location data not yet connected)",
+    distanceMiles,
+    neighborhood,
     source: source === "Google Search" ? "Google Search" : "Calloway Website",
   };
 
@@ -457,9 +550,6 @@ app.post("/api/email-signup", async (req, res) => {
     }
     if (insertError) throw insertError;
 
-    // Send the coupon email using our now-verified domain, so it can go
-    // to any recipient (not just the Resend account owner's own email,
-    // which is all the shared onboarding@resend.dev address allowed).
     if (process.env.RESEND_API_KEY) {
       try {
         const emailRes = await fetch("https://api.resend.com/emails", {
@@ -548,7 +638,24 @@ app.get("/api/analytics/summary", (req, res) => {
     .sort((a, b) => b.count - a.count)
     .slice(0, 8);
 
-  const heatMapData: { neighborhood: string; count: number; averageDistance: number }[] = [];
+  // Real neighborhood heat-map data, now that location is actually
+  // captured for searches (previously always empty since the underlying
+  // data was fabricated/unavailable).
+  const heatMapGroups: Record<string, { count: number; totalDistance: number }> = {};
+  searchQueries.forEach((q) => {
+    if (q.neighborhood && q.distanceMiles != null && !q.neighborhood.startsWith("Unknown")) {
+      if (!heatMapGroups[q.neighborhood]) {
+        heatMapGroups[q.neighborhood] = { count: 0, totalDistance: 0 };
+      }
+      heatMapGroups[q.neighborhood].count += 1;
+      heatMapGroups[q.neighborhood].totalDistance += q.distanceMiles;
+    }
+  });
+  const heatMapData = Object.keys(heatMapGroups).map((neighborhood) => ({
+    neighborhood,
+    count: heatMapGroups[neighborhood].count,
+    averageDistance: Math.round((heatMapGroups[neighborhood].totalDistance / heatMapGroups[neighborhood].count) * 10) / 10,
+  })).sort((a, b) => b.count - a.count);
 
   const googleCategoryCounts: Record<string, number> = {};
   const googleBrandCounts: Record<string, number> = {};
@@ -637,7 +744,7 @@ app.post("/api/analytics/ai-insights", requireMerchantAuth, async (req, res) => 
 
     return {
       topCategory,
-      fallbackInsights: `### Search Activity Summary for Calloway Market\nBased on ${searchQueries.length} logged search${searchQueries.length === 1 ? "" : "es"} on your site${topCategory ? `, **${topCategory}** is your most-searched category so far` : ""}. Location/distance data is not yet connected, so this summary reflects search terms and categories only — not geographic demand.`,
+      fallbackInsights: `### Search Activity Summary for Calloway Market\nBased on ${searchQueries.length} logged search${searchQueries.length === 1 ? "" : "es"} on your site${topCategory ? `, **${topCategory}** is your most-searched category so far` : ""}. ${topCategory ? "" : ""}`,
       fallbackSuggestions: topCategory
         ? [`"${topCategory}" is your most-searched category — consider featuring it prominently or checking stock levels.`]
         : ["Not enough data yet to generate specific suggestions."],
@@ -669,16 +776,15 @@ app.post("/api/analytics/ai-insights", requireMerchantAuth, async (req, res) => 
       return await ai.models.generateContent({
         model: modelName,
         contents: `You are a retail analytics consultant for 'Calloway Market', a liquor, beer, and snacks store in Bakersfield, California.
-Analyze the following JSON array of real customer search queries logged on the store's own website.
-Identify genuine patterns in what customers are searching for — popular categories, repeated terms, timing trends.
-Do not invent neighborhoods, distances, or any detail not present in the data below. If location/distance fields say "unknown" or are not connected, do not speculate about geography.
+Analyze the following JSON array of real customer search queries logged on the store's own website, including real distance and neighborhood data where available.
+Identify genuine patterns in what customers are searching for — popular categories, repeated terms, timing trends, and geographic demand.
 
 Search Queries:
 ${JSON.stringify(recentQueriesFormatted, null, 2)}
 
 Return your response strictly in JSON format matching this TypeScript schema:
 {
-  "insights": "string (A cohesive 2-3 paragraph factual summary of search term and category trends found in the data above — no invented locations or statistics)",
+  "insights": "string (A cohesive 2-3 paragraph factual summary of search term, category, and geographic trends found in the data above)",
   "suggestions": "string[] (An array of up to 4 action-oriented business suggestions grounded only in the actual data provided)"
 }`,
         config: {
@@ -801,5 +907,3 @@ if (!process.env.VERCEL) {
 }
 
 export default app;
-
-
