@@ -457,11 +457,9 @@ app.post("/api/email-signup", async (req, res) => {
     }
     if (insertError) throw insertError;
 
-    // Send the coupon email. No AbortController/timeout here — a timeout
-    // was likely killing the request to Resend before it completed,
-    // which is why nothing showed up in logs or in Resend's dashboard.
-    // We always log the raw status + body from Resend so the real
-    // outcome is visible every time, regardless of success or failure.
+    // Send the coupon email using our now-verified domain, so it can go
+    // to any recipient (not just the Resend account owner's own email,
+    // which is all the shared onboarding@resend.dev address allowed).
     if (process.env.RESEND_API_KEY) {
       try {
         const emailRes = await fetch("https://api.resend.com/emails", {
@@ -471,7 +469,7 @@ app.post("/api/email-signup", async (req, res) => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            from: "Calloway Market <from: "Calloway Market <promos@callowaymarket.com>",>",
+            from: "Calloway Market <promos@callowaymarket.com>",
             to: normalizedEmail,
             subject: "Your 10% Off Code — Calloway Market",
             html: `
