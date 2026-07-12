@@ -11,11 +11,6 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchCount, setSearchCount] = useState(0); // Track customer activity to trigger refetches
 
-  // Merchant lock/unlock state.
-  // SECURITY FIX: previously stored a plain "true"/"false" flag in
-  // localStorage that persisted forever and proved nothing to the server.
-  // Now we store the actual verified merchant key in sessionStorage (cleared
-  // when the browser tab closes) and re-send it on every merchant request.
   const [merchantKey, setMerchantKey] = useState<string>(() => {
     return sessionStorage.getItem("calloway_merchant_key") || "";
   });
@@ -24,8 +19,6 @@ export default function App() {
   });
   const [isPasscodeModalOpen, setIsPasscodeModalOpen] = useState(false);
 
-  // Home/scroll-to-top button visibility - only show once the user has
-  // actually scrolled down, not on every page load.
   const [showScrollTop, setShowScrollTop] = useState(false);
   useEffect(() => {
     const handleScroll = () => setShowScrollTop(window.scrollY > 400);
@@ -35,7 +28,6 @@ export default function App() {
   const [passcode, setPasscode] = useState("");
   const [passcodeError, setPasscodeError] = useState("");
 
-  // Fetch initial product catalog from server
   const fetchProducts = async () => {
     setIsLoading(true);
     try {
@@ -55,15 +47,49 @@ export default function App() {
     fetchProducts();
   }, []);
 
-  // Post search query to Express server to record local store demand logs
+  // Attempts to get the visitor's real GPS coordinates from their browser
+  // (asks permission once). Resolves to null if denied, unavailable, or
+  // the person doesn't respond within 5 seconds — the server automatically
+  // falls back to IP-based location in that case, so this never blocks
+  // the search from being logged.
+  const getBrowserLocation = (): Promise<{ latitude: number; longitude: number } | null> => {
+    return new Promise((resolve) => {
+      if (!("geolocation" in navigator)) {
+        resolve(null);
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+        },
+        () => resolve(null), // permission denied or error — fall back silently
+        { timeout: 5000, maximumAge: 600000 } // reuse a location up to 10 min old
+      );
+    });
+  };
+
+  // Post search query to Express server to record local store demand logs.
+  // Includes real GPS coordinates when the visitor grants browser location
+  // access; the server falls back to IP-based location automatically when
+  // they don't, so this always logs a real location either way.
   const handleSearchLog = async (query: string, category: string) => {
     try {
+      const location = await getBrowserLocation();
       const res = await fetch("/api/searches", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ query, category }),
+        body: JSON.stringify({
+          query,
+          category,
+          ...(location
+            ? { latitude: location.latitude, longitude: location.longitude }
+            : {}),
+        }),
       });
       if (res.ok) {
         // Increment search count to trigger real-time updates inside the dashboard if it's open
@@ -96,17 +122,6 @@ export default function App() {
     }
   };
 
-  // Handle Passcode Unlock
-  // SECURITY FIX: previously this checked the entered passcode against
-  // hardcoded plaintext strings ("calloway2816", "2816", "calloway") visible
-  // to anyone who opened browser dev tools, and unlocking only flipped a
-  // local boolean — the real API endpoints were never actually protected.
-  //
-  // Now: the entered code IS the merchant key, and we verify it against the
-  // server itself (which checks it against MERCHANT_API_KEY, a real secret
-  // set in your hosting platform's environment variables, never in code).
-  // Only a server-confirmed correct key unlocks merchant features, and that
-  // same key is then sent on every merchant request going forward.
   const handleUnlock = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasscodeError("");
@@ -131,7 +146,6 @@ export default function App() {
         setPasscodeError("Could not verify access key. Please try again.");
         return;
       }
-      // Server confirmed this key is valid — store it for this session only.
       setMerchantKey(passcode.trim());
       sessionStorage.setItem("calloway_merchant_key", passcode.trim());
       setIsUnlocked(true);
@@ -152,11 +166,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0C0B0A] flex flex-col font-sans text-[#F4F1ED]">
-      {/* Universal Top Nav */}
       <header className="sticky top-0 bg-[#0C0B0A] border-b border-[#F4F1ED]/10 z-40 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-20">
-            {/* Elegant Store Branding - Click circle 3 times or double click to trigger modal */}
             <div 
               className="flex items-center gap-3 cursor-pointer group"
               onClick={() => {
@@ -178,7 +190,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Portal Toggle Tabs - ONLY shown if unlocked */}
             {isUnlocked ? (
               <div className="flex bg-gray-100 p-1 rounded-xl border border-gray-200/55">
                 <button
@@ -221,7 +232,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content Stage */}
       <main className={`flex-grow max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-10 ${viewMode === "merchant" ? "bg-slate-50/50 text-gray-800" : ""}`}>
         {viewMode === "customer" ? (
           <CustomerCatalog
@@ -240,7 +250,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Real Store Info Footer */}
       <footer className="bg-[#0C0B0A] border-t border-[#F4F1ED]/10 py-8 text-[#F4F1ED]/60 font-light">
         <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
           <div className="flex items-start gap-2.5">
@@ -267,7 +276,6 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Scroll-to-top / Home button - only visible once scrolled down */}
       {showScrollTop && (
         <button
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
@@ -278,7 +286,6 @@ export default function App() {
         </button>
       )}
 
-      {/* Passcode Unlock Modal */}
       {isPasscodeModalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-[#121110] rounded-2xl border border-[#F4F1ED]/10 max-w-sm w-full p-6 shadow-2xl relative space-y-4">
@@ -355,4 +362,3 @@ export default function App() {
     </div>
   );
 }
-
