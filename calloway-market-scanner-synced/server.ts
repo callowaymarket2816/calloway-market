@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import { google } from "googleapis";
 
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -144,42 +145,15 @@ async function saveSearchesToDisk(searches: SearchQuery[]): Promise<void> {
   }
 }
 
-const MERCHANT_API_KEY = process.env.MERCHANT_API_KEY;
-
-function requireMerchantAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
-  if (!MERCHANT_API_KEY) {
-    return res.status(503).json({
-      error: "Merchant authentication is not configured on this server. Set MERCHANT_API_KEY in your hosting secrets before using merchant features.",
-    });
-  }
-  const providedKey = req.headers["x-merchant-key"];
-  if (providedKey !== MERCHANT_API_KEY) {
-    return res.status(401).json({ error: "Unauthorized. Invalid or missing merchant key." });
-  }
-  next();
-}
-
 // ---------------------------------------------------------------------------
 // LOCATION TRACKING: real distance/neighborhood data for customer searches.
-// Previously this was always "Unknown (location data not yet connected)" —
-// now it's genuinely computed two ways:
-//   1. If the visitor's browser grants GPS location access, we use their
-//      exact coordinates (most accurate) and reverse-geocode them into a
-//      neighborhood name via OpenStreetMap's free Nominatim service.
-//   2. Otherwise, we fall back to estimating location from the visitor's
-//      IP address via ip-api.com's free tier — no permission popup needed,
-//      works automatically, but only accurate to city level.
 // ---------------------------------------------------------------------------
-
-// Approximate coordinates for Calloway Market, 2816 Calloway Dr #100,
-// Bakersfield, CA 93312. Replace with exact geocoded coordinates if you
-// have them, for slightly more accurate distance calculations.
 const STORE_LAT = 35.4094;
 const STORE_LNG = -119.0958;
 
 function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const R = 3958.8; // Earth's radius in miles
+  const R = 3958.8;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -214,6 +188,74 @@ async function geolocateIp(ip: string): Promise<{ lat: number; lng: number; city
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// GOOGLE SEARCH CONSOLE INTEGRATION: pulls real search queries that led
+// people to click through to your site from Google itself (separate from
+// on-site search, which is tracked elsewhere). Requires three environment
+// variables: GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_SERVICE_ACCOUNT_KEY, and
+// SEARCH_CONSOLE_SITE_URL (e.g. "sc-domain:callowaymarket.com").
+// ---------------------------------------------------------------------------
+async function fetchGoogleSearchQueries(): Promise<{ query: string; clicks: number }[]> {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  const siteUrl = process.env.SEARCH_CONSOLE_SITE_URL;
+
+  if (!email || !key || !siteUrl) {
+    console.log("Google Search Console not configured — skipping sync.");
+    return [];
+  }
+
+  try {
+    const auth = new google.auth.JWT({
+      email,
+      key: key.replace(/\\n/g, "\n"),
+      scopes: ["https://www.googleapis.com/auth/webmasters.readonly"],
+    });
+
+    const searchconsole = google.searchconsole({ version: "v1", auth });
+
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 3); // last 3 days, Search Console data lags a couple days
+
+    const response = await searchconsole.searchanalytics.query({
+      siteUrl,
+      requestBody: {
+        startDate: startDate.toISOString().split("T")[0],
+        endDate: endDate.toISOString().split("T")[0],
+        dimensions: ["query"],
+        rowLimit: 25,
+      },
+    });
+
+    const rows = response.data.rows || [];
+    return rows
+      .filter((row) => row.keys && row.keys[0])
+      .map((row) => ({
+        query: row.keys![0],
+        clicks: row.clicks || 0,
+      }));
+  } catch (err) {
+    console.error("Failed to fetch Google Search Console data:", err);
+    return [];
+  }
+}
+
+const MERCHANT_API_KEY = process.env.MERCHANT_API_KEY;
+
+function requireMerchantAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!MERCHANT_API_KEY) {
+    return res.status(503).json({
+      error: "Merchant authentication is not configured on this server. Set MERCHANT_API_KEY in your hosting secrets before using merchant features.",
+    });
+  }
+  const providedKey = req.headers["x-merchant-key"];
+  if (providedKey !== MERCHANT_API_KEY) {
+    return res.status(401).json({ error: "Unauthorized. Invalid or missing merchant key." });
+  }
+  next();
 }
 
 let ai: GoogleGenAI | null = null;
@@ -435,8 +477,6 @@ app.patch("/api/products/:id/price", requireMerchantAuth, async (req, res) => {
   res.json({ success: true, id, price: product.price, storePrice: product.storePrice });
 });
 
-// 2. Log a new search query (Customer-facing action). Now captures real
-// location data: browser GPS if granted, otherwise IP-based estimate.
 app.post("/api/searches", async (req, res) => {
   const { query, category, source, latitude, longitude } = req.body;
   if (!query || typeof query !== "string") {
@@ -501,6 +541,85 @@ app.post("/api/searches", async (req, res) => {
 
 app.get("/api/searches", (req, res) => {
   res.json(searchQueries);
+});
+
+// Syncs real Google search queries into the search log. Called automatically
+// once a day by a Vercel Cron Job (see vercel.json), but can also be
+// triggered manually by the merchant if needed.
+app.post("/api/searches/sync-google", requireMerchantAuth, async (req, res) => {
+  try {
+    const queries = await fetchGoogleSearchQueries();
+    let added = 0;
+
+    for (const { query } of queries) {
+      const newSearch: SearchQuery = {
+        id: `gsc_${Date.now()}_${added}`,
+        query,
+        category: "Unknown",
+        timestamp: new Date().toISOString(),
+        distanceMiles: null,
+        neighborhood: "Unknown (Google Search referral)",
+        source: "Google Search",
+      };
+      searchQueries.unshift(newSearch);
+      added++;
+    }
+
+    if (searchQueries.length > 200) {
+      searchQueries = searchQueries.slice(0, 200);
+    }
+
+    if (added > 0) {
+      await saveSearchesToDisk(searchQueries);
+    }
+
+    res.json({ success: true, added, queries: queries.map((q) => q.query) });
+  } catch (err: any) {
+    console.error("Google Search Console sync failed:", err);
+    res.status(500).json({ error: err.message || "Sync failed." });
+  }
+});
+
+// Cron-friendly version of the same sync, protected by a simple secret
+// instead of the merchant key (Vercel Cron can't send custom headers on
+// the free tier the same way, so this uses a query param check instead).
+app.get("/api/cron/sync-google-searches", async (req, res) => {
+  const providedSecret = req.query.secret;
+  if (!process.env.CRON_SECRET || providedSecret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized." });
+  }
+
+  try {
+    const queries = await fetchGoogleSearchQueries();
+    let added = 0;
+
+    for (const { query } of queries) {
+      const newSearch: SearchQuery = {
+        id: `gsc_${Date.now()}_${added}`,
+        query,
+        category: "Unknown",
+        timestamp: new Date().toISOString(),
+        distanceMiles: null,
+        neighborhood: "Unknown (Google Search referral)",
+        source: "Google Search",
+      };
+      searchQueries.unshift(newSearch);
+      added++;
+    }
+
+    if (searchQueries.length > 200) {
+      searchQueries = searchQueries.slice(0, 200);
+    }
+
+    if (added > 0) {
+      await saveSearchesToDisk(searchQueries);
+    }
+
+    res.json({ success: true, added });
+  } catch (err: any) {
+    console.error("Scheduled Google Search Console sync failed:", err);
+    res.status(500).json({ error: err.message || "Sync failed." });
+  }
 });
 
 function generateCouponCode(): string {
@@ -638,9 +757,6 @@ app.get("/api/analytics/summary", (req, res) => {
     .sort((a, b) => b.count - a.count)
     .slice(0, 8);
 
-  // Real neighborhood heat-map data, now that location is actually
-  // captured for searches (previously always empty since the underlying
-  // data was fabricated/unavailable).
   const heatMapGroups: Record<string, { count: number; totalDistance: number }> = {};
   searchQueries.forEach((q) => {
     if (q.neighborhood && q.distanceMiles != null && !q.neighborhood.startsWith("Unknown")) {
@@ -744,7 +860,7 @@ app.post("/api/analytics/ai-insights", requireMerchantAuth, async (req, res) => 
 
     return {
       topCategory,
-      fallbackInsights: `### Search Activity Summary for Calloway Market\nBased on ${searchQueries.length} logged search${searchQueries.length === 1 ? "" : "es"} on your site${topCategory ? `, **${topCategory}** is your most-searched category so far` : ""}. ${topCategory ? "" : ""}`,
+      fallbackInsights: `### Search Activity Summary for Calloway Market\nBased on ${searchQueries.length} logged search${searchQueries.length === 1 ? "" : "es"} on your site${topCategory ? `, **${topCategory}** is your most-searched category so far` : ""}.`,
       fallbackSuggestions: topCategory
         ? [`"${topCategory}" is your most-searched category — consider featuring it prominently or checking stock levels.`]
         : ["Not enough data yet to generate specific suggestions."],
