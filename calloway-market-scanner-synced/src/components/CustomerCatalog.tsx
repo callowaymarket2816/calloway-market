@@ -292,7 +292,18 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                     </div>
                   </div>
                   <div className="h-40 bg-gradient-to-br from-[#1c1a18] to-[#0C0B0A] flex items-center justify-center border-b border-[#C4A484]/20">
-                    <IconComp className="w-16 h-16 text-[#C4A484]/70 group-hover:text-[#C4A484] group-hover:scale-110 transition" strokeWidth={1.5} />
+                    {(product as any).imageUrl ? (
+                      <img
+                        src={(product as any).imageUrl}
+                        alt={product.name}
+                        className="w-full h-full object-contain p-2"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    ) : (
+                      <IconComp className="w-16 h-16 text-[#C4A484]/70 group-hover:text-[#C4A484] group-hover:scale-110 transition" strokeWidth={1.5} />
+                    )}
                   </div>
                   <div className="p-5">
                     <p className="font-serif text-lg text-[#F4F1ED] group-hover:text-[#C4A484] transition-colors line-clamp-2 mb-3">
@@ -434,6 +445,18 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
               className="bg-[#121110] border border-[#F4F1ED]/10 hover:border-[#C4A484]/30 transition duration-300 group flex flex-col justify-between overflow-hidden cursor-pointer shadow-xl relative"
             >
               <div className="p-6 pb-0">
+                {(product as any).imageUrl ? (
+                  <div className="h-44 bg-white/5 flex items-center justify-center overflow-hidden">
+                    <img
+                      src={(product as any).imageUrl}
+                      alt={product.name}
+                      className="w-full h-full object-contain p-3"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                  </div>
+                ) : (
                 <div className={`h-44 bg-gradient-to-br ${product.imageColor} p-4 flex flex-col justify-between relative text-white overflow-hidden`}>
                   <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]"></div>
                   <div className="flex justify-between items-start z-10">
@@ -464,6 +487,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                     </div>
                   )}
                 </div>
+                )}
               </div>
 
               <div className="p-6 flex-1 flex flex-col justify-between space-y-5">
@@ -566,6 +590,33 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
               className="bg-[#121110] border border-[#F4F1ED]/10 w-full max-w-2xl overflow-hidden shadow-2xl my-8"
               onClick={(e) => e.stopPropagation()}
             >
+              {(selectedProduct as any).imageUrl ? (
+                <div className="bg-[#0C0B0A] text-white p-8 relative flex items-center justify-center" style={{ minHeight: "260px" }}>
+                  <div className="flex justify-between items-start absolute top-4 left-4 right-4 z-10">
+                    <span className="text-[11px] uppercase tracking-[0.12em] bg-black/40 px-3 py-1 border border-white/10 font-bold text-white">
+                      {selectedProduct.category}
+                    </span>
+                    <button
+                      onClick={() => {
+                        setSelectedProduct(null);
+                        setIsInquiring(false);
+                        setInquirySubmitted(false);
+                      }}
+                      className="text-white/85 hover:text-white hover:bg-white/10 p-1.5 rounded-full transition cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <img
+                    src={(selectedProduct as any).imageUrl}
+                    alt={selectedProduct.name}
+                    className="max-h-56 object-contain"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                </div>
+              ) : (
               <div className={`bg-gradient-to-br ${selectedProduct.imageColor} text-white p-8 relative`}>
                 <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]"></div>
                 <div className="flex justify-between items-start relative z-10">
@@ -590,6 +641,16 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                   </p>
                 </div>
               </div>
+              )}
+
+              {(selectedProduct as any).imageUrl && (
+                <div className="px-6 md:px-8 pt-6">
+                  <h2 className="text-3xl md:text-4xl font-serif tracking-wide text-[#F4F1ED]">{selectedProduct.name}</h2>
+                  <p className="text-[#C4A484]/90 font-mono text-xs uppercase tracking-wider mt-2">
+                    Origin: {selectedProduct.origin} • {selectedProduct.category === "Snack" ? "Type: Gourmet Snack" : (selectedProduct.category === "Soda" || selectedProduct.abv === "0%" || selectedProduct.abv === "0" || selectedProduct.abv === "0.0%" ? "Type: Non-Alcoholic Soda" : `Strength: ${selectedProduct.abv}`)} • Volume: {selectedProduct.size}
+                  </p>
+                </div>
+              )}
 
               <div className="p-6 md:p-8 space-y-6 max-h-[60vh] overflow-y-auto">
                 {!isInquiring ? (
