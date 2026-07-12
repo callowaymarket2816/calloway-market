@@ -9,20 +9,6 @@
     {
       "path": "/api/cron/sync-google-searches?secret=calloway8f3k2x9",
       "schedule": "0 8 * * *"
-    }
-  ]
-}
-{
-  "buildCommand": "vite build --outDir vercel_output",
-  "outputDirectory": "vercel_output",
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/(.*)", "destination": "/index.html" }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/sync-google-searches?secret=calloway8f3k2x9",
-      "schedule": "0 8 * * *"
     },
     {
       "path": "/api/cron/lookup-product-images?secret=calloway8f3k2x9",
