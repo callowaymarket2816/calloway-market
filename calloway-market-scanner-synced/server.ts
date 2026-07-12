@@ -191,16 +191,12 @@ async function geolocateIp(ip: string): Promise<{ lat: number; lng: number; city
 }
 
 // ---------------------------------------------------------------------------
-// GOOGLE SEARCH CONSOLE INTEGRATION: pulls real search queries that led
-// people to click through to your site from Google itself (separate from
-// on-site search, which is tracked elsewhere). Requires three environment
-// variables: GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_SERVICE_ACCOUNT_KEY, and
-// SEARCH_CONSOLE_SITE_URL (e.g. "sc-domain:callowaymarket.com").
+// GOOGLE SEARCH CONSOLE INTEGRATION
 // ---------------------------------------------------------------------------
 async function fetchGoogleSearchQueries(): Promise<{ query: string; clicks: number }[]> {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-  const siteUrl = process.env.SEARCH_CONSOLE_SITE_URL;
+  const siteUrl = process.env.SEARCH_CONSOLE_SITE_URL?.trim();
 
   if (!email || !key || !siteUrl) {
     console.log("Google Search Console not configured — skipping sync.");
@@ -218,7 +214,7 @@ async function fetchGoogleSearchQueries(): Promise<{ query: string; clicks: numb
 
     const endDate = new Date();
     const startDate = new Date();
-    startDate.setDate(startDate.getDate() - 3); // last 3 days, Search Console data lags a couple days
+    startDate.setDate(startDate.getDate() - 3);
 
     const response = await searchconsole.searchanalytics.query({
       siteUrl,
@@ -240,6 +236,27 @@ async function fetchGoogleSearchQueries(): Promise<{ query: string; clicks: numb
   } catch (err) {
     console.error("Failed to fetch Google Search Console data:", err);
     return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PRODUCT IMAGE LOOKUP: fetches real product photos via UPC using
+// UPCitemdb's free tier (100 lookups/day). Runs a small batch daily via
+// cron rather than all at once, since the free tier is rate-limited.
+// ---------------------------------------------------------------------------
+async function lookupProductImageByUpc(upc: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${upc}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const item = data.items?.[0];
+    if (item && Array.isArray(item.images) && item.images.length > 0) {
+      return item.images[0];
+    }
+    return null;
+  } catch (err) {
+    console.error(`UPC image lookup failed for ${upc}:`, err);
+    return null;
   }
 }
 
@@ -350,7 +367,8 @@ app.post("/api/products", requireMerchantAuth, async (req, res) => {
       iconName: p.iconName || "Wine",
       popularity: Number(p.popularity) || 80,
       price: p.price ? Number(p.price) : undefined,
-      marginPercent: p.marginPercent ? Number(p.marginPercent) : undefined
+      marginPercent: p.marginPercent ? Number(p.marginPercent) : undefined,
+      upc: p.upc || undefined,
     };
   });
 
@@ -477,6 +495,102 @@ app.patch("/api/products/:id/price", requireMerchantAuth, async (req, res) => {
   res.json({ success: true, id, price: product.price, storePrice: product.storePrice });
 });
 
+// One-time (or re-runnable) sync that attaches real UPC codes to existing
+// products by matching product name against the upc_reference table.
+// Safe to run multiple times — only adds/updates the `upc` field.
+app.post("/api/products/sync-upc", requireMerchantAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(503).json({ error: "Database not configured." });
+  }
+
+  try {
+    const { data: upcRows, error } = await supabase
+      .from("upc_reference")
+      .select("product_name, upc");
+    if (error) throw error;
+
+    if (!upcRows || upcRows.length === 0) {
+      return res.json({ success: true, matched: 0, message: "No UPC reference data found." });
+    }
+
+    const upcMap = new Map<string, string>();
+    for (const row of upcRows) {
+      const key = String(row.product_name).trim().toUpperCase();
+      upcMap.set(key, String(row.upc));
+    }
+
+    if (!lastProductLoadWasReliable) {
+      currentProducts = await loadProductsFromDisk();
+    }
+
+    let matched = 0;
+    for (const product of currentProducts) {
+      const key = product.name.trim().toUpperCase();
+      const upc = upcMap.get(key);
+      if (upc) {
+        (product as any).upc = upc;
+        matched++;
+      }
+    }
+
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, matched, total: currentProducts.length });
+  } catch (err: any) {
+    console.error("UPC sync failed:", err);
+    res.status(500).json({ error: err.message || "Sync failed." });
+  }
+});
+
+// Daily batch job: looks up real product images for up to 100 products
+// per day (UPCitemdb free tier limit) that have a UPC but haven't been
+// looked up yet. Runs via Vercel Cron — see vercel.json.
+app.get("/api/cron/lookup-product-images", async (req, res) => {
+  const providedSecret = req.query.secret;
+  if (!process.env.CRON_SECRET || providedSecret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized." });
+  }
+
+  try {
+    if (!lastProductLoadWasReliable) {
+      currentProducts = await loadProductsFromDisk();
+    }
+
+    const candidates = currentProducts.filter(
+      (p: any) => p.upc && !p.imageLookupAttempted
+    );
+
+    const batch = candidates.slice(0, 100);
+    let found = 0;
+    let attempted = 0;
+
+    for (const product of batch as any[]) {
+      const imageUrl = await lookupProductImageByUpc(product.upc);
+      product.imageLookupAttempted = true;
+      if (imageUrl) {
+        product.imageUrl = imageUrl;
+        found++;
+      }
+      attempted++;
+      // Small delay between requests to stay well within rate limits.
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+
+    if (attempted > 0) {
+      await saveProductsToDisk(currentProducts);
+    }
+
+    res.json({
+      success: true,
+      attempted,
+      found,
+      remaining: candidates.length - attempted,
+    });
+  } catch (err: any) {
+    console.error("Product image lookup batch failed:", err);
+    res.status(500).json({ error: err.message || "Batch failed." });
+  }
+});
+
 app.post("/api/searches", async (req, res) => {
   const { query, category, source, latitude, longitude } = req.body;
   if (!query || typeof query !== "string") {
@@ -543,9 +657,6 @@ app.get("/api/searches", (req, res) => {
   res.json(searchQueries);
 });
 
-// Syncs real Google search queries into the search log. Called automatically
-// once a day by a Vercel Cron Job (see vercel.json), but can also be
-// triggered manually by the merchant if needed.
 app.post("/api/searches/sync-google", requireMerchantAuth, async (req, res) => {
   try {
     const queries = await fetchGoogleSearchQueries();
@@ -580,9 +691,6 @@ app.post("/api/searches/sync-google", requireMerchantAuth, async (req, res) => {
   }
 });
 
-// Cron-friendly version of the same sync, protected by a simple secret
-// instead of the merchant key (Vercel Cron can't send custom headers on
-// the free tier the same way, so this uses a query param check instead).
 app.get("/api/cron/sync-google-searches", async (req, res) => {
   const providedSecret = req.query.secret;
   if (!process.env.CRON_SECRET || providedSecret !== process.env.CRON_SECRET) {
@@ -704,6 +812,86 @@ app.post("/api/email-signup", async (req, res) => {
   } catch (err) {
     console.error("Email signup failed:", err);
     res.status(500).json({ error: "Could not complete signup. Please try again." });
+  }
+});
+
+// Sends a one-off promotional email to every subscriber in email_signups.
+app.post("/api/email-signup/broadcast", requireMerchantAuth, async (req, res) => {
+  const { subject, message } = req.body;
+  if (!subject || !message || typeof subject !== "string" || typeof message !== "string") {
+    return res.status(400).json({ error: "Both 'subject' and 'message' are required." });
+  }
+
+  if (!supabase) {
+    return res.status(503).json({ error: "Database not configured." });
+  }
+
+  if (!process.env.RESEND_API_KEY) {
+    return res.status(503).json({ error: "Email sending is not configured (missing RESEND_API_KEY)." });
+  }
+
+  try {
+    const { data: subscribers, error } = await supabase
+      .from("email_signups")
+      .select("email, coupon_code");
+    if (error) throw error;
+
+    if (!subscribers || subscribers.length === 0) {
+      return res.json({ success: true, sent: 0, failed: 0, message: "No subscribers found." });
+    }
+
+    const MAX_SAFE_BROADCAST_SIZE = 300;
+    if (subscribers.length > MAX_SAFE_BROADCAST_SIZE) {
+      return res.status(400).json({
+        error: `Subscriber list (${subscribers.length}) is too large to send in a single request safely. Contact your developer to add batched sending.`,
+      });
+    }
+
+    let sent = 0;
+    let failed = 0;
+    const failedEmails: string[] = [];
+
+    for (const { email } of subscribers) {
+      const html = `
+        <div style="font-family: sans-serif; padding: 20px;">
+          ${message.replace(/\n/g, "<br>")}
+          <p style="margin-top: 20px; font-size: 12px; color: #999; border-top: 1px solid #eee; padding-top: 12px;">
+            You're receiving this because you signed up for offers at Calloway Market.
+            <a href="mailto:promos@callowaymarket.com?subject=Unsubscribe&body=Please%20unsubscribe%20${encodeURIComponent(email)}">Unsubscribe</a>
+          </p>
+        </div>
+      `;
+      try {
+        const emailRes = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: "Calloway Market <promos@callowaymarket.com>",
+            to: email,
+            subject,
+            html,
+          }),
+        });
+        if (emailRes.ok) {
+          sent++;
+        } else {
+          failed++;
+          failedEmails.push(email);
+        }
+      } catch {
+        failed++;
+        failedEmails.push(email);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 550));
+    }
+
+    res.json({ success: true, sent, failed, failedEmails });
+  } catch (err: any) {
+    console.error("Broadcast email failed:", err);
+    res.status(500).json({ error: err.message || "Broadcast failed." });
   }
 });
 
