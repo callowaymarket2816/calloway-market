@@ -512,10 +512,16 @@ app.post("/api/products/sync-upc", requireMerchantAuth, async (req, res) => {
     if (!upcRows || upcRows.length === 0) {
       return res.json({ success: true, matched: 0, message: "No UPC reference data found." });
     }
+    const normalize = (str: string) =>
+      str
+        .trim()
+        .toUpperCase()
+        .replace(/[.,'"!?]/g, "")   // strip common punctuation
+        .replace(/\s+/g, " ");      // collapse multiple spaces into one
 
     const upcMap = new Map<string, string>();
     for (const row of upcRows) {
-      const key = String(row.product_name).trim().toUpperCase();
+      const key = normalize(String(row.product_name));
       upcMap.set(key, String(row.upc));
     }
 
@@ -525,14 +531,14 @@ app.post("/api/products/sync-upc", requireMerchantAuth, async (req, res) => {
 
     let matched = 0;
     for (const product of currentProducts) {
-      const key = product.name.trim().toUpperCase();
+      const key = normalize(product.name);
       const upc = upcMap.get(key);
       if (upc) {
         (product as any).upc = upc;
         matched++;
       }
     }
-
+    
     await saveProductsToDisk(currentProducts);
     res.json({ success: true, matched, total: currentProducts.length });
   } catch (err: any) {
