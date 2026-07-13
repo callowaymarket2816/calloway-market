@@ -121,4 +121,90 @@ async function loadSearchesFromDisk(): Promise<SearchQuery[]> {
   return [];
 }
 
-async function saveSearchesToDisk(searches: SearchQuery[]): Promise
+async function saveSearchesToDisk(searches: SearchQuery[]): Promise<void> {
+  if (!supabase) {
+    memorySearchesFallback = searches;
+    console.warn("Supabase not configured — search history will NOT persist across restarts.");
+    return;
+  }
+  try {
+    const newest = searches[0];
+    if (!newest) return;
+    const { error } = await supabase.from("website_searches").insert({
+      id: newest.id,
+      query: newest.query,
+      category: newest.category ?? null,
+      timestamp: newest.timestamp,
+      distance_miles: newest.distanceMiles,
+      neighborhood: newest.neighborhood,
+      source: newest.source ?? null,
+    });
+    if (error) throw error;
+  } catch (err) {
+    console.error("Failed to save search entry to Supabase:", err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// LOCATION TRACKING
+// ---------------------------------------------------------------------------
+const STORE_LAT = 35.4094;
+const STORE_LNG = -119.0958;
+
+function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const R = 3958.8;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c * 10) / 10;
+}
+
+async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=14`,
+      { headers: { "User-Agent": "CallowayMarketWebsite/1.0 (contact: callowaymarket2816@gmail.com)" } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const addr = data.address || {};
+    return addr.suburb || addr.neighbourhood || addr.city_district || addr.city || addr.town || addr.village || null;
+  } catch {
+    return null;
+  }
+}
+
+async function geolocateIp(ip: string): Promise<{ lat: number; lng: number; city: string } | null> {
+  try {
+    const res = await fetch(`http://ip-api.com/json/${ip}?fields=status,lat,lon,city`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.status !== "success") return null;
+    return { lat: data.lat, lng: data.lon, city: data.city };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GOOGLE SEARCH CONSOLE INTEGRATION
+// ---------------------------------------------------------------------------
+async function fetchGoogleSearchQueries(): Promise<{ query: string; clicks: number }[]> {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  const siteUrl = process.env.SEARCH_CONSOLE_SITE_URL?.trim();
+
+  if (!email || !key || !siteUrl) {
+    console.log("Google Search Console not configured — skipping sync.");
+    return [];
+  }
+
+  try {
+    const auth = new google.auth.JWT({
+      email,
+      key: key.replace(/\\n/g, "\n"),
+      scopes: ["https://www.googleapis.com/auth/webmasters.readonly"],
