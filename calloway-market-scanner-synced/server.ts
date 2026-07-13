@@ -249,11 +249,13 @@ async function fetchGoogleSearchQueries(): Promise<{ query: string; clicks: numb
 //                              Free tier limited to 100 lookups/day.
 //   2. Open Food Facts      - free, no key, no meaningful rate limit; strong
 //                              coverage for food & beverage items, but
-//                              images are user-submitted, so we flag these
-//                              for manual review and filter out tiny/low
-//                              quality submissions.
+//                              images are user-submitted and sometimes
+//                              attached to the wrong barcode entirely, so we
+//                              cross-check the product name before trusting
+//                              the image, and flag surviving matches for a
+//                              quick human glance.
 //   3. Open Products Facts  - sister project to OFF; better for non-food/
-//                              household items. Same review flagging applies.
+//                              household items. Same checks apply.
 // ---------------------------------------------------------------------------
 type ImageLookupResult = { url: string; source: "upcitemdb" | "openfoodfacts" | "openproductsfacts" } | null;
 
@@ -278,7 +280,34 @@ async function tryUpcItemDb(upc: string): Promise<string | null> {
 // dimensions via the "images" field, keyed by image id, with "sizes").
 const MIN_IMAGE_WIDTH = 400;
 
-async function tryOpenFoodFacts(upc: string): Promise<string | null> {
+// Stopwords that don't help identify a specific product — ignored when
+// comparing our product name against a crowdsourced database's name for
+// the same barcode, to catch cases where a barcode is mismatched entirely.
+const NAME_MATCH_STOPWORDS = new Set([
+  "the", "and", "or", "of", "with", "in", "on", "for", "a", "an",
+  "pk", "pack", "oz", "ml", "l", "ct", "count", "size",
+]);
+
+function normalizeNameWords(name: string): string[] {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !NAME_MATCH_STOPWORDS.has(w));
+}
+
+// Returns true if the two product names share at least one meaningful word,
+// or if we don't have enough info to compare (in which case we don't block
+// on name alone — the resolution/other checks still apply).
+function namesLikelyMatch(ourName: string, theirName: string | undefined | null): boolean {
+  if (!theirName) return true;
+  const ourWords = new Set(normalizeNameWords(ourName));
+  const theirWords = normalizeNameWords(theirName);
+  if (ourWords.size === 0 || theirWords.length === 0) return true;
+  return theirWords.some((w) => ourWords.has(w));
+}
+
+async function tryOpenFoodFacts(upc: string, productName: string): Promise<string | null> {
   try {
     const res = await fetch(
       `https://world.openfoodfacts.org/api/v2/product/${upc}.json?fields=product_name,image_url,image_front_url,images`,
@@ -287,6 +316,8 @@ async function tryOpenFoodFacts(upc: string): Promise<string | null> {
     if (!res.ok) return null;
     const data = await res.json();
     if (data.status === 0 || !data.product) return null;
+
+    if (!namesLikelyMatch(productName, data.product.product_name)) return null;
 
     const imageUrl = data.product.image_front_url || data.product.image_url;
     if (!imageUrl) return null;
@@ -303,7 +334,7 @@ async function tryOpenFoodFacts(upc: string): Promise<string | null> {
   }
 }
 
-async function tryOpenProductsFacts(upc: string): Promise<string | null> {
+async function tryOpenProductsFacts(upc: string, productName: string): Promise<string | null> {
   try {
     const res = await fetch(
       `https://world.openproductsfacts.org/api/v2/product/${upc}.json?fields=product_name,image_url,image_front_url,images`,
@@ -312,6 +343,8 @@ async function tryOpenProductsFacts(upc: string): Promise<string | null> {
     if (!res.ok) return null;
     const data = await res.json();
     if (data.status === 0 || !data.product) return null;
+
+    if (!namesLikelyMatch(productName, data.product.product_name)) return null;
 
     const imageUrl = data.product.image_front_url || data.product.image_url;
     if (!imageUrl) return null;
@@ -328,14 +361,14 @@ async function tryOpenProductsFacts(upc: string): Promise<string | null> {
   }
 }
 
-async function lookupProductImageByUpc(upc: string): Promise<ImageLookupResult> {
+async function lookupProductImageByUpc(upc: string, productName: string): Promise<ImageLookupResult> {
   const fromUpcItemDb = await tryUpcItemDb(upc);
   if (fromUpcItemDb) return { url: fromUpcItemDb, source: "upcitemdb" };
 
-  const fromOFF = await tryOpenFoodFacts(upc);
+  const fromOFF = await tryOpenFoodFacts(upc, productName);
   if (fromOFF) return { url: fromOFF, source: "openfoodfacts" };
 
-  const fromOPF = await tryOpenProductsFacts(upc);
+  const fromOPF = await tryOpenProductsFacts(upc, productName);
   if (fromOPF) return { url: fromOPF, source: "openproductsfacts" };
 
   return null;
@@ -651,7 +684,7 @@ app.get("/api/cron/lookup-product-images", async (req, res) => {
     let attempted = 0;
 
     for (const product of batch as any[]) {
-      const result = await lookupProductImageByUpc(product.upc);
+      const result = await lookupProductImageByUpc(product.upc, product.name);
       product.imageLookupAttempted = true;
       if (result) {
         product.imageUrl = result.url;
