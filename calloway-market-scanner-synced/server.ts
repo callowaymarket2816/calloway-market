@@ -240,11 +240,24 @@ async function fetchGoogleSearchQueries(): Promise<{ query: string; clicks: numb
 }
 
 // ---------------------------------------------------------------------------
-// PRODUCT IMAGE LOOKUP: fetches real product photos via UPC using
-// UPCitemdb's free tier (100 lookups/day). Runs a small batch daily via
-// cron rather than all at once, since the free tier is rate-limited.
+// PRODUCT IMAGE LOOKUP (multi-source): tries several free barcode databases
+// in order, since no single one has full coverage for a convenience store's
+// mixed inventory (liquor, snacks, drinks, household items).
+//
+// Order of attempts:
+//   1. UPCitemdb            - commercial/curated database; trusted directly.
+//                              Free tier limited to 100 lookups/day.
+//   2. Open Food Facts      - free, no key, no meaningful rate limit; strong
+//                              coverage for food & beverage items, but
+//                              images are user-submitted, so we flag these
+//                              for manual review and filter out tiny/low
+//                              quality submissions.
+//   3. Open Products Facts  - sister project to OFF; better for non-food/
+//                              household items. Same review flagging applies.
 // ---------------------------------------------------------------------------
-async function lookupProductImageByUpc(upc: string): Promise<string | null> {
+type ImageLookupResult = { url: string; source: "upcitemdb" | "openfoodfacts" | "openproductsfacts" } | null;
+
+async function tryUpcItemDb(upc: string): Promise<string | null> {
   try {
     const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${upc}`);
     if (!res.ok) return null;
@@ -255,9 +268,77 @@ async function lookupProductImageByUpc(upc: string): Promise<string | null> {
     }
     return null;
   } catch (err) {
-    console.error(`UPC image lookup failed for ${upc}:`, err);
+    console.error(`UPCitemdb lookup failed for ${upc}:`, err);
     return null;
   }
+}
+
+// Minimum pixel width to accept a crowdsourced image. Filters out tiny
+// thumbnails and obviously low-effort submissions (OFF/OPF expose image
+// dimensions via the "images" field, keyed by image id, with "sizes").
+const MIN_IMAGE_WIDTH = 400;
+
+async function tryOpenFoodFacts(upc: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://world.openfoodfacts.org/api/v2/product/${upc}.json?fields=product_name,image_url,image_front_url,images`,
+      { headers: { "User-Agent": "CallowayMarketWebsite/1.0 (contact: callowaymarket2816@gmail.com)" } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.status === 0 || !data.product) return null;
+
+    const imageUrl = data.product.image_front_url || data.product.image_url;
+    if (!imageUrl) return null;
+
+    const images = data.product.images || {};
+    const frontEntry = Object.values(images).find((img: any) => img?.sizes?.full) as any;
+    const width = frontEntry?.sizes?.full?.w || 0;
+    if (width && width < MIN_IMAGE_WIDTH) return null;
+
+    return imageUrl;
+  } catch (err) {
+    console.error(`Open Food Facts lookup failed for ${upc}:`, err);
+    return null;
+  }
+}
+
+async function tryOpenProductsFacts(upc: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://world.openproductsfacts.org/api/v2/product/${upc}.json?fields=product_name,image_url,image_front_url,images`,
+      { headers: { "User-Agent": "CallowayMarketWebsite/1.0 (contact: callowaymarket2816@gmail.com)" } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.status === 0 || !data.product) return null;
+
+    const imageUrl = data.product.image_front_url || data.product.image_url;
+    if (!imageUrl) return null;
+
+    const images = data.product.images || {};
+    const frontEntry = Object.values(images).find((img: any) => img?.sizes?.full) as any;
+    const width = frontEntry?.sizes?.full?.w || 0;
+    if (width && width < MIN_IMAGE_WIDTH) return null;
+
+    return imageUrl;
+  } catch (err) {
+    console.error(`Open Products Facts lookup failed for ${upc}:`, err);
+    return null;
+  }
+}
+
+async function lookupProductImageByUpc(upc: string): Promise<ImageLookupResult> {
+  const fromUpcItemDb = await tryUpcItemDb(upc);
+  if (fromUpcItemDb) return { url: fromUpcItemDb, source: "upcitemdb" };
+
+  const fromOFF = await tryOpenFoodFacts(upc);
+  if (fromOFF) return { url: fromOFF, source: "openfoodfacts" };
+
+  const fromOPF = await tryOpenProductsFacts(upc);
+  if (fromOPF) return { url: fromOPF, source: "openproductsfacts" };
+
+  return null;
 }
 
 const MERCHANT_API_KEY = process.env.MERCHANT_API_KEY;
@@ -570,10 +651,14 @@ app.get("/api/cron/lookup-product-images", async (req, res) => {
     let attempted = 0;
 
     for (const product of batch as any[]) {
-      const imageUrl = await lookupProductImageByUpc(product.upc);
+      const result = await lookupProductImageByUpc(product.upc);
       product.imageLookupAttempted = true;
-      if (imageUrl) {
-        product.imageUrl = imageUrl;
+      if (result) {
+        product.imageUrl = result.url;
+        // UPCitemdb is a commercial, curated database — trust it directly.
+        // OFF/OPF are crowdsourced — flag these for a quick human glance
+        // before they're shown to customers.
+        product.imageNeedsReview = result.source !== "upcitemdb";
         found++;
       }
       attempted++;
