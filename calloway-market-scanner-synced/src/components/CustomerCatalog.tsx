@@ -364,7 +364,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </button>
       )}
 
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex items-center justify-around py-2.5 z-40">
+     <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex items-center justify-around py-2.5 z-40">
         <button
           onClick={() => searchInputRef.current?.focus()}
           className="flex flex-col items-center gap-1 text-gray-500 hover:text-[#E4002B] transition cursor-pointer"
