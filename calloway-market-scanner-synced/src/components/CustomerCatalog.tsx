@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Search, MapPin, Inbox, CheckCircle2, ChevronRight, ChevronLeft, ChevronUp, FileText, Info, ShoppingBag, ShoppingCart, Menu, Home, User, Wine, Martini, Beer, Zap, Cookie, CupSoda, Package, Droplet, Coffee } from "lucide-react";
+import { Search, MapPin, Inbox, CheckCircle2, ChevronRight, ChevronLeft, ChevronUp, FileText, Info, ShoppingBag, ShoppingCart, Menu, Home, Store, X, Wine, Martini, Beer, Zap, Cookie, CupSoda, Package, Droplet, Coffee } from "lucide-react";
 import { Product } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import callowayLogo from "../assets/calloway-logo.png";
@@ -8,6 +8,15 @@ interface CustomerCatalogProps {
   products: Product[];
   isLoading: boolean;
   onSearchLog: (query: string, category: string) => void;
+}
+
+interface PromoSettings {
+  imageUrl: string;
+  height: number;
+  headline: string;
+  subtext: string;
+  buttonLabel: string;
+  buttonUrl: string;
 }
 
 export default function CustomerCatalog({ products, isLoading, onSearchLog }: CustomerCatalogProps) {
@@ -33,6 +42,16 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     const handleScroll = () => setShowScrollTop(window.scrollY > 500);
     window.addEventListener("scroll", handleScroll);
     return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // Promo banner — fetched from the merchant-editable settings endpoint.
+  // Falls back to nothing shown if the merchant hasn't configured one yet.
+  const [promo, setPromo] = useState<PromoSettings | null>(null);
+  useEffect(() => {
+    fetch("/api/settings/promo")
+      .then((r) => r.json())
+      .then(setPromo)
+      .catch(() => {});
   }, []);
 
   const [signupEmail, setSignupEmail] = useState("");
@@ -66,18 +85,26 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
   };
 
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [redirectingProduct, setRedirectingProduct] = useState<Product | null>(null);
-  const [isRedirectModalOpen, setIsRedirectModalOpen] = useState(false);
   const [isInquiring, setIsInquiring] = useState(false);
   const [inquiryName, setInquiryName] = useState("");
   const [inquiryContact, setInquiryContact] = useState("");
   const [inquirySubmitted, setInquirySubmitted] = useState(false);
 
+  // Order choice sheet — shown whenever the person taps "Add to cart" on a
+  // product, or the "Order" tab in the bottom nav. Lets them pick DoorDash
+  // or Grubhub instead of always going straight to one service.
+  const [orderSheetProduct, setOrderSheetProduct] = useState<Product | null>(null);
+  const [showGenericOrderSheet, setShowGenericOrderSheet] = useState(false);
+  const orderSheetOpen = !!orderSheetProduct || showGenericOrderSheet;
+
+  const closeOrderSheet = () => {
+    setOrderSheetProduct(null);
+    setShowGenericOrderSheet(false);
+  };
+
   const handleAddToDoorDash = (product: Product) => {
     onSearchLog(`DoorDash Redirect: ${product.name}`, product.category);
     triggerSearchFetch();
-    setRedirectingProduct(product);
-    setIsRedirectModalOpen(true);
     window.open(getDoorDashUrl(product), "_blank");
   };
 
@@ -86,6 +113,21 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     triggerSearchFetch();
     window.open(getGrubhubUrl(product), "_blank");
   };
+
+  const confirmOrderChoice = (service: "doordash" | "grubhub") => {
+    if (orderSheetProduct) {
+      if (service === "doordash") handleAddToDoorDash(orderSheetProduct);
+      else handleAddToGrubhub(orderSheetProduct);
+    } else {
+      onSearchLog(`${service === "doordash" ? "DoorDash" : "Grubhub"} Redirect: Store Order`, "Order");
+      window.open(service === "doordash" ? getDoorDashUrl() : getGrubhubUrl(), "_blank");
+    }
+    closeOrderSheet();
+  };
+
+  // Store Info — replaces the previous non-functional "Account" tab, since
+  // there's no customer login system on this site. Shows real store details.
+  const [isStoreInfoOpen, setIsStoreInfoOpen] = useState(false);
 
   const handleInquirySubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -204,7 +246,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           <button
             onClick={(e) => {
               e.stopPropagation();
-              handleAddToDoorDash(product);
+              setOrderSheetProduct(product);
             }}
             className="w-full py-2.5 bg-[#E4002B] hover:bg-[#c40025] text-white text-sm font-bold rounded-full transition cursor-pointer"
           >
@@ -244,6 +286,48 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           />
         </form>
       </div>
+
+      {promo && (promo.imageUrl || promo.headline) && (
+        <div className="px-4 pt-4">
+          <div
+            className="rounded-2xl overflow-hidden relative bg-gray-100"
+            style={{ height: `${promo.height || 220}px` }}
+          >
+            {promo.imageUrl && (
+              <img
+                src={promo.imageUrl}
+                alt={promo.headline || "Promotion"}
+                className="absolute inset-0 w-full h-full object-cover"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+            )}
+            {(promo.headline || promo.subtext || promo.buttonLabel) && (
+              <div className="absolute inset-0 bg-black/25 flex flex-col justify-center px-6">
+                {promo.headline && (
+                  <h2 className="text-white text-2xl font-extrabold leading-tight max-w-xs drop-shadow-lg">
+                    {promo.headline}
+                  </h2>
+                )}
+                {promo.subtext && (
+                  <p className="text-white/90 text-sm mt-1 max-w-xs drop-shadow">{promo.subtext}</p>
+                )}
+                {promo.buttonLabel && (
+                  <button
+                    onClick={() =>
+                      promo.buttonUrl
+                        ? window.open(promo.buttonUrl, "_blank")
+                        : setShowGenericOrderSheet(true)
+                    }
+                    className="mt-3 self-start px-5 py-2 bg-white text-black text-xs font-bold rounded-full hover:bg-gray-100 transition cursor-pointer"
+                  >
+                    {promo.buttonLabel}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="px-4 pt-4">
         <div className="rounded-2xl bg-gradient-to-br from-[#1a1a1a] to-[#3a3a3a] text-white p-6">
@@ -380,14 +464,15 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           <span className="text-[10px] font-semibold">Home</span>
         </button>
         <button
+          onClick={() => setIsStoreInfoOpen(true)}
           className="flex flex-col items-center gap-1 text-gray-500 hover:text-[#E4002B] transition cursor-pointer"
         >
-          <User className="w-5 h-5" />
-          <span className="text-[10px] font-semibold">Account</span>
+          <Store className="w-5 h-5" />
+          <span className="text-[10px] font-semibold">Store Info</span>
         </button>
         <button
           type="button"
-          onClick={() => window.open(getDoorDashUrl(), "_blank")}
+          onClick={() => setShowGenericOrderSheet(true)}
           className="flex flex-col items-center gap-1 text-gray-500 hover:text-[#E4002B] transition cursor-pointer"
         >
           <ShoppingCart className="w-5 h-5" />
@@ -395,20 +480,102 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </button>
       </div>
 
+      {/* Order choice sheet — DoorDash or Grubhub */}
+      <AnimatePresence>
+        {orderSheetOpen && (
+          <div
+            className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50"
+            onClick={closeOrderSheet}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 40 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 40 }}
+              className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl p-6 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-extrabold text-gray-900">Choose delivery service</h3>
+                <button onClick={closeOrderSheet} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-full transition cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              {orderSheetProduct && (
+                <p className="text-sm text-gray-500">{orderSheetProduct.name}</p>
+              )}
+              <button
+                onClick={() => confirmOrderChoice("doordash")}
+                className="w-full py-3.5 bg-[#FF3008] hover:bg-[#E52B07] text-white font-bold text-sm rounded-full transition cursor-pointer flex items-center justify-center gap-2"
+              >
+                🛵 Order on DoorDash
+              </button>
+              <button
+                onClick={() => confirmOrderChoice("grubhub")}
+                className="w-full py-3.5 bg-[#F63440] hover:bg-[#d92b36] text-white font-bold text-sm rounded-full transition cursor-pointer flex items-center justify-center gap-2"
+              >
+                🍔 Order on Grubhub
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Store Info sheet */}
+      <AnimatePresence>
+        {isStoreInfoOpen && (
+          <div
+            className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50"
+            onClick={() => setIsStoreInfoOpen(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 40 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 40 }}
+              className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl p-6 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-extrabold text-gray-900">Calloway Market</h3>
+                <button onClick={() => setIsStoreInfoOpen(false)} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-full transition cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="flex items-start gap-3">
+                <MapPin className="w-5 h-5 text-[#E4002B] shrink-0 mt-0.5" />
+                <p className="text-sm text-gray-700">2816 Calloway Dr #100<br/>Bakersfield, CA 93312</p>
+              </div>
+              <p className="text-xs text-gray-400">
+                For current hours, phone, and directions, use the map/DoorDash listing or contact the store directly.
+              </p>
+              <button
+                onClick={() => {
+                  setIsStoreInfoOpen(false);
+                  setShowGenericOrderSheet(true);
+                }}
+                className="w-full py-3 bg-[#E4002B] hover:bg-[#c40025] text-white font-bold text-sm rounded-full transition cursor-pointer"
+              >
+                Order Delivery
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Product Detail Modal */}
       <AnimatePresence>
         {selectedProduct && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-[#121110] border border-[#F4F1ED]/10 w-full max-w-2xl overflow-hidden shadow-2xl my-8"
+              className="bg-white border border-gray-200 w-full max-w-2xl rounded-2xl overflow-hidden shadow-2xl my-8"
               onClick={(e) => e.stopPropagation()}
             >
               {(selectedProduct as any).imageUrl ? (
-                <div className="bg-[#0C0B0A] text-white p-8 relative flex items-center justify-center" style={{ minHeight: "260px" }}>
+                <div className="bg-gray-50 relative flex items-center justify-center" style={{ minHeight: "260px" }}>
                   <div className="flex justify-between items-start absolute top-4 left-4 right-4 z-10">
-                    <span className="text-[11px] uppercase tracking-[0.12em] bg-black/40 px-3 py-1 border border-white/10 font-bold text-white">
+                    <span className="text-[11px] uppercase tracking-[0.12em] bg-white/90 px-3 py-1 border border-gray-200 rounded-full font-bold text-gray-700">
                       {selectedProduct.category}
                     </span>
                     <button
@@ -417,9 +584,9 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                         setIsInquiring(false);
                         setInquirySubmitted(false);
                       }}
-                      className="text-white/85 hover:text-white hover:bg-white/10 p-1.5 rounded-full transition cursor-pointer"
+                      className="text-gray-500 hover:text-gray-800 hover:bg-gray-100 p-1.5 rounded-full transition cursor-pointer"
                     >
-                      ✕
+                      <X className="w-5 h-5" />
                     </button>
                   </div>
                   <img
@@ -433,7 +600,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                 <div className={`bg-gradient-to-br ${selectedProduct.imageColor} text-white p-8 relative`}>
                   <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]"></div>
                   <div className="flex justify-between items-start relative z-10">
-                    <span className="text-[11px] uppercase tracking-[0.12em] bg-black/40 px-3 py-1 border border-white/10 font-bold text-white">
+                    <span className="text-[11px] uppercase tracking-[0.12em] bg-black/40 px-3 py-1 border border-white/10 rounded-full font-bold text-white">
                       {selectedProduct.category}
                     </span>
                     <button
@@ -444,99 +611,89 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                       }}
                       className="text-white/85 hover:text-white hover:bg-white/10 p-1.5 rounded-full transition cursor-pointer"
                     >
-                      ✕
+                      <X className="w-5 h-5" />
                     </button>
-                  </div>
-                  <div className="mt-8 space-y-2 relative z-10">
-                    <h2 className="text-3xl md:text-4xl font-serif tracking-wide">{selectedProduct.name}</h2>
-                    <p className="text-amber-100/90 font-mono text-xs uppercase tracking-wider">
-                      Origin: {selectedProduct.origin} • {selectedProduct.category === "Snack" ? "Type: Gourmet Snack" : (selectedProduct.category === "Soda" || selectedProduct.abv === "0%" || selectedProduct.abv === "0" || selectedProduct.abv === "0.0%" ? "Type: Non-Alcoholic Soda" : `Strength: ${selectedProduct.abv}`)} • Volume: {selectedProduct.size}
-                    </p>
                   </div>
                 </div>
               )}
 
-              {(selectedProduct as any).imageUrl && (
-                <div className="px-6 md:px-8 pt-6">
-                  <h2 className="text-3xl md:text-4xl font-serif tracking-wide text-[#F4F1ED]">{selectedProduct.name}</h2>
-                  <p className="text-[#C4A484]/90 font-mono text-xs uppercase tracking-wider mt-2">
-                    Origin: {selectedProduct.origin} • {selectedProduct.category === "Snack" ? "Type: Gourmet Snack" : (selectedProduct.category === "Soda" || selectedProduct.abv === "0%" || selectedProduct.abv === "0" || selectedProduct.abv === "0.0%" ? "Type: Non-Alcoholic Soda" : `Strength: ${selectedProduct.abv}`)} • Volume: {selectedProduct.size}
-                  </p>
-                </div>
-              )}
+              <div className="px-6 md:px-8 pt-6">
+                <h2 className="text-2xl md:text-3xl font-extrabold text-gray-900">{selectedProduct.name}</h2>
+                <p className="text-gray-400 font-mono text-xs uppercase tracking-wider mt-2">
+                  Origin: {selectedProduct.origin} • {selectedProduct.category === "Snack" ? "Type: Gourmet Snack" : (selectedProduct.category === "Soda" || selectedProduct.abv === "0%" || selectedProduct.abv === "0" || selectedProduct.abv === "0.0%" ? "Type: Non-Alcoholic Soda" : `Strength: ${selectedProduct.abv}`)} • Volume: {selectedProduct.size}
+                </p>
+              </div>
 
               <div className="p-6 md:p-8 space-y-6 max-h-[60vh] overflow-y-auto">
                 {!isInquiring ? (
                   <>
                     <div className="space-y-6">
                       <div>
-                        <h4 className="text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-2">The Story</h4>
-                        <p className="text-[#F4F1ED]/80 text-sm leading-relaxed font-light">{selectedProduct.description}</p>
+                        <h4 className="text-[11px] font-bold uppercase text-[#E4002B] tracking-[0.12em] mb-2">The Story</h4>
+                        <p className="text-gray-600 text-sm leading-relaxed">{selectedProduct.description}</p>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
-                        <div className="bg-[#0C0B0A] border border-[#F4F1ED]/10 p-5">
-                          <h4 className="text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-3">Tasting Profile</h4>
+                        <div className="bg-gray-50 border border-gray-200 rounded-xl p-5">
+                          <h4 className="text-[11px] font-bold uppercase text-[#E4002B] tracking-[0.12em] mb-3">Tasting Profile</h4>
                           <div className="flex flex-wrap gap-1.5">
                             {selectedProduct.tastingNotes.map((note, idx) => (
-                              <span key={idx} className="text-xs px-2.5 py-1 bg-[#121110] border border-[#F4F1ED]/10 text-[#F4F1ED]">
+                              <span key={idx} className="text-xs px-2.5 py-1 bg-white border border-gray-200 rounded-full text-gray-700">
                                 {note}
                               </span>
                             ))}
                           </div>
                         </div>
-                        <div className="bg-[#0C0B0A] border border-[#F4F1ED]/10 p-5">
-                          <h4 className="text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-3">Epicurean Pairing</h4>
-                          <p className="text-[#F4F1ED]/80 text-xs leading-relaxed italic">"{selectedProduct.foodPairing}"</p>
+                        <div className="bg-gray-50 border border-gray-200 rounded-xl p-5">
+                          <h4 className="text-[11px] font-bold uppercase text-[#E4002B] tracking-[0.12em] mb-3">Epicurean Pairing</h4>
+                          <p className="text-gray-600 text-xs leading-relaxed italic">"{selectedProduct.foodPairing}"</p>
                         </div>
                       </div>
                     </div>
 
-                    <div className="bg-[#0C0B0A] border border-amber-950/40 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="bg-red-50 border border-red-100 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
-                        <h4 className="text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-1.5">Delivery Options</h4>
-                        <div className="flex items-center gap-3">
-                          <span className="text-sm font-semibold text-[#F4F1ED]">Available via DoorDash or Grubhub</span>
-                        </div>
+                        <h4 className="text-[11px] font-bold uppercase text-[#E4002B] tracking-[0.12em] mb-1.5">Delivery Options</h4>
+                        <span className="text-sm font-semibold text-gray-800">Available via DoorDash or Grubhub</span>
                       </div>
-                      <span className="text-xs text-emerald-400 font-bold uppercase tracking-wider bg-[#FF3008]/10 border border-[#FF3008]/20 px-3 py-1">
+                      <span className="text-xs text-emerald-700 font-bold uppercase tracking-wider bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1">
                         Bakersfield Courier Active
                       </span>
                     </div>
 
-                    <div className="flex items-start gap-3 bg-[#0C0B0A] border border-[#F4F1ED]/10 p-4">
-                      <Info className="w-5 h-5 text-[#C4A484] shrink-0 mt-0.5" />
-                      <div className="text-xs text-[#F4F1ED]/80 space-y-1">
-                        <span className="font-bold text-[#F4F1ED] block uppercase tracking-wider">Availability Status: {selectedProduct.stockStatus}</span>
-                        <p className="font-light leading-relaxed">
+                    <div className="flex items-start gap-3 bg-gray-50 border border-gray-200 rounded-xl p-4">
+                      <Info className="w-5 h-5 text-[#E4002B] shrink-0 mt-0.5" />
+                      <div className="text-xs text-gray-600 space-y-1">
+                        <span className="font-bold text-gray-900 block uppercase tracking-wider">Availability Status: {selectedProduct.stockStatus}</span>
+                        <p className="leading-relaxed">
                           This item is carried at Calloway Market on Calloway Drive. For immediate checkout and courier delivery to your doorstep, please order directly through DoorDash or Grubhub.
                         </p>
                       </div>
                     </div>
 
-                    <div className="pt-6 border-t border-[#F4F1ED]/10 flex flex-col md:flex-row gap-3">
+                    <div className="pt-6 border-t border-gray-100 flex flex-col md:flex-row gap-3">
                       <button
                         type="button"
                         onClick={() => handleAddToDoorDash(selectedProduct)}
-                        className="flex-1 px-6 py-4 bg-[#FF3008] text-white hover:bg-[#E52B07] border border-[#FF3008]/30 font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer rounded-none"
+                        className="flex-1 px-6 py-4 bg-[#FF3008] text-white hover:bg-[#E52B07] font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer rounded-full"
                       >
                         🛵 Order on DoorDash
                       </button>
                       <button
                         type="button"
                         onClick={() => handleAddToGrubhub(selectedProduct)}
-                        className="flex-1 px-6 py-4 bg-[#F63440] text-white hover:bg-[#d92b36] border border-[#F63440]/30 font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer rounded-none"
+                        className="flex-1 px-6 py-4 bg-[#F63440] text-white hover:bg-[#d92b36] font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer rounded-full"
                       >
                         🍔 Order on Grubhub
                       </button>
                       <button
                         onClick={() => setIsInquiring(true)}
-                        className="flex-1 px-6 py-4 bg-[#F4F1ED] hover:bg-[#F4F1ED]/90 text-black font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+                        className="flex-1 px-6 py-4 bg-gray-900 hover:bg-gray-800 text-white font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer rounded-full"
                       >
-                        <FileText className="w-4 h-4" /> Submit Bespoke Inquiry & Reserve
+                        <FileText className="w-4 h-4" /> Submit Inquiry
                       </button>
                       <button
                         onClick={() => setSelectedProduct(null)}
-                        className="px-6 py-4 border border-[#F4F1ED]/20 text-[#F4F1ED]/80 hover:text-[#F4F1ED] hover:bg-white/5 font-bold text-[11px] uppercase tracking-widest transition cursor-pointer"
+                        className="px-6 py-4 border border-gray-200 text-gray-600 hover:text-gray-900 hover:bg-gray-50 font-bold text-[11px] uppercase tracking-widest transition cursor-pointer rounded-full"
                       >
                         Keep Browsing
                       </button>
@@ -550,70 +707,70 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                         animate={{ opacity: 1, scale: 1 }}
                         className="text-center py-8 space-y-5"
                       >
-                        <div className="w-16 h-16 bg-[#C4A484]/10 text-[#C4A484] border border-[#C4A484]/20 rounded-full flex items-center justify-center mx-auto shadow-inner">
+                        <div className="w-16 h-16 bg-red-50 text-[#E4002B] border border-red-200 rounded-full flex items-center justify-center mx-auto">
                           <CheckCircle2 className="w-10 h-10" />
                         </div>
                         <div className="space-y-2">
-                          <h3 className="text-2xl font-serif italic text-[#F4F1ED]">Inquiry Logged</h3>
-                          <p className="text-[#F4F1ED]/70 text-sm max-w-md mx-auto font-light leading-relaxed">
-                            Your inquiry for <span className="font-medium text-[#F4F1ED]">{selectedProduct.name}</span> has been recorded.
+                          <h3 className="text-2xl font-extrabold text-gray-900">Inquiry Logged</h3>
+                          <p className="text-gray-600 text-sm max-w-md mx-auto leading-relaxed">
+                            Your inquiry for <span className="font-medium text-gray-900">{selectedProduct.name}</span> has been recorded.
                           </p>
                         </div>
-                        <p className="text-[10px] uppercase tracking-widest text-[#C4A484] bg-[#0C0B0A] border border-[#F4F1ED]/10 px-4 py-3 max-w-sm mx-auto font-light">
+                        <p className="text-[10px] uppercase tracking-widest text-[#E4002B] bg-red-50 border border-red-200 rounded-full px-4 py-3 max-w-sm mx-auto">
                           For immediate ordering, please use the DoorDash or Grubhub links — inquiries here are not yet monitored for callbacks.
                         </p>
                       </motion.div>
                     ) : (
                       <>
                         <div className="space-y-2">
-                          <h3 className="font-serif italic text-xl text-[#F4F1ED]">Product Inquiry Form</h3>
-                          <p className="text-[#F4F1ED]/60 text-xs font-light leading-relaxed">
+                          <h3 className="font-extrabold text-xl text-gray-900">Product Inquiry Form</h3>
+                          <p className="text-gray-500 text-xs leading-relaxed">
                             Submit your contact details and we'll follow up about this item.
                           </p>
                         </div>
                         <div className="space-y-4">
                           <div>
-                            <label className="block text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-2">Your Full Name</label>
+                            <label className="block text-[11px] font-bold uppercase text-[#E4002B] tracking-[0.12em] mb-2">Your Full Name</label>
                             <input
                               type="text"
                               required
                               placeholder="e.g. Jordan Smith"
                               value={inquiryName}
                               onChange={(e) => setInquiryName(e.target.value)}
-                              className="w-full px-4 py-3 bg-[#0C0B0A] border border-[#F4F1ED]/10 text-white text-sm focus:outline-none focus:ring-1 focus:ring-[#C4A484] focus:border-[#C4A484]"
+                              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 text-sm focus:outline-none focus:ring-1 focus:ring-[#E4002B] focus:border-[#E4002B]"
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-2">Contact Number or Email</label>
+                            <label className="block text-[11px] font-bold uppercase text-[#E4002B] tracking-[0.12em] mb-2">Contact Number or Email</label>
                             <input
                               type="text"
                               required
                               placeholder="e.g. +1 (555) 234-5678 or name@domain.com"
                               value={inquiryContact}
                               onChange={(e) => setInquiryContact(e.target.value)}
-                              className="w-full px-4 py-3 bg-[#0C0B0A] border border-[#F4F1ED]/10 text-white text-sm focus:outline-none focus:ring-1 focus:ring-[#C4A484] focus:border-[#C4A484]"
+                              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 text-sm focus:outline-none focus:ring-1 focus:ring-[#E4002B] focus:border-[#E4002B]"
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] font-bold uppercase text-[#C4A484] tracking-[0.12em] mb-2">Special Notes / Quantity (Optional)</label>
+                            <label className="block text-[11px] font-bold uppercase text-[#E4002B] tracking-[0.12em] mb-2">Special Notes / Quantity (Optional)</label>
                             <textarea
                               rows={2}
                               placeholder="e.g. Looking for a full case, or have a question about this item."
-                              className="w-full px-4 py-3 bg-[#0C0B0A] border border-[#F4F1ED]/10 text-white text-sm focus:outline-none focus:ring-1 focus:ring-[#C4A484] focus:border-[#C4A484] resize-none font-light"
+                              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 text-sm focus:outline-none focus:ring-1 focus:ring-[#E4002B] focus:border-[#E4002B] resize-none"
                             />
                           </div>
                         </div>
-                        <div className="pt-6 border-t border-[#F4F1ED]/10 flex gap-3">
+                        <div className="pt-6 border-t border-gray-100 flex gap-3">
                           <button
                             type="submit"
-                            className="flex-1 px-6 py-4 bg-[#F4F1ED] hover:bg-[#F4F1ED]/90 text-black font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+                            className="flex-1 px-6 py-4 bg-gray-900 hover:bg-gray-800 text-white font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer rounded-full"
                           >
                             <CheckCircle2 className="w-4 h-4" /> Submit Inquiry
                           </button>
                           <button
                             type="button"
                             onClick={() => setIsInquiring(false)}
-                            className="px-6 py-4 border border-[#F4F1ED]/20 text-[#F4F1ED]/80 hover:text-[#F4F1ED] hover:bg-white/5 font-bold text-[11px] uppercase tracking-widest transition cursor-pointer"
+                            className="px-6 py-4 border border-gray-200 text-gray-600 hover:text-gray-900 hover:bg-gray-50 font-bold text-[11px] uppercase tracking-widest transition cursor-pointer rounded-full"
                           >
                             Back to Details
                           </button>
@@ -622,51 +779,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                     )}
                   </form>
                 )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {isRedirectModalOpen && redirectingProduct && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 z-55" style={{ zIndex: 9999 }}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-[#121110] border border-[#F4F1ED]/10 p-8 max-w-md w-full text-center space-y-6 shadow-2xl relative"
-            >
-              <div className="w-16 h-16 bg-[#FF3008]/10 text-[#FF3008] border border-[#FF3008]/20 rounded-full flex items-center justify-center mx-auto animate-pulse">
-                <ShoppingBag className="w-8 h-8" />
-              </div>
-              <div className="space-y-2">
-                <span className="text-[11px] uppercase font-bold tracking-[0.12em] text-[#C4A484] block">Delivery Coordination</span>
-                <h3 className="text-2xl font-serif italic text-[#F4F1ED]">Redirecting to DoorDash</h3>
-                <p className="text-[#F4F1ED]/70 text-xs font-light leading-relaxed">
-                  We are taking you to the official DoorDash shop for <span className="font-semibold text-white">{redirectingProduct.name}</span> to complete your purchase and schedule delivery.
-                </p>
-              </div>
-              <div className="p-4 bg-[#0C0B0A] border border-[#F4F1ED]/5 text-left rounded-none space-y-1">
-                <span className="text-[9px] uppercase tracking-wider text-gray-500 block font-mono">Selected Bottle</span>
-                <span className="text-xs font-serif text-[#F4F1ED] font-medium block italic">{redirectingProduct.name}</span>
-                <span className="text-[10px] font-mono text-gray-400 block">{redirectingProduct.category} • {redirectingProduct.size}</span>
-              </div>
-              <div className="space-y-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => window.open(getDoorDashUrl(redirectingProduct), "_blank")}
-                  className="w-full py-3 bg-[#FF3008] hover:bg-[#E52B07] text-white font-bold text-xs uppercase tracking-widest transition flex items-center justify-center gap-2 shadow-lg"
-                >
-                  Click Here if Not Redirected
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsRedirectModalOpen(false)}
-                  className="w-full py-3 border border-[#F4F1ED]/10 hover:bg-white/5 text-[#F4F1ED]/60 hover:text-[#F4F1ED] font-bold text-[10px] uppercase tracking-widest transition"
-                >
-                  Return to Catalog
-                </button>
               </div>
             </motion.div>
           </div>
