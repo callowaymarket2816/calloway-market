@@ -10,8 +10,11 @@ interface CustomerCatalogProps {
   onSearchLog: (query: string, category: string) => void;
 }
 
-interface PromoSettings {
-  imageUrl: string;
+interface PromoBanner {
+  id: string;
+  mediaType: "image" | "video";
+  mediaUrl: string;
+  imageFit: "cover" | "contain";
   height: number;
   headline: string;
   subtext: string;
@@ -44,13 +47,13 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  // Promo banner — fetched from the merchant-editable settings endpoint.
-  // Falls back to nothing shown if the merchant hasn't configured one yet.
-  const [promo, setPromo] = useState<PromoSettings | null>(null);
+  // Promo banners — a list of merchant-editable banners (photo or video),
+  // fetched from the settings endpoint. Empty array shows nothing.
+  const [promos, setPromos] = useState<PromoBanner[]>([]);
   useEffect(() => {
-    fetch("/api/settings/promo")
+    fetch("/api/settings/promos")
       .then((r) => r.json())
-      .then(setPromo)
+      .then((data) => setPromos(data.promos || []))
       .catch(() => {});
   }, []);
 
@@ -287,20 +290,29 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </form>
       </div>
 
-      {promo && (promo.imageUrl || promo.headline) && (
-        <div className="px-4 pt-4">
+      {promos.map((promo) => (
+        <div key={promo.id} className="px-4 pt-4">
           <div
             className="rounded-2xl overflow-hidden relative bg-gray-100"
             style={{ height: `${promo.height || 220}px` }}
           >
-            {promo.imageUrl && (
+            {promo.mediaUrl && promo.mediaType === "video" ? (
+              <video
+                src={promo.mediaUrl}
+                autoPlay
+                muted
+                loop
+                playsInline
+                className={`absolute inset-0 w-full h-full ${promo.imageFit === "contain" ? "object-contain bg-gray-900" : "object-cover"}`}
+              />
+            ) : promo.mediaUrl ? (
               <img
-                src={promo.imageUrl}
+                src={promo.mediaUrl}
                 alt={promo.headline || "Promotion"}
-                className="absolute inset-0 w-full h-full object-cover"
+                className={`absolute inset-0 w-full h-full ${promo.imageFit === "contain" ? "object-contain bg-gray-900" : "object-cover"}`}
                 onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
               />
-            )}
+            ) : null}
             {(promo.headline || promo.subtext || promo.buttonLabel) && (
               <div className="absolute inset-0 bg-black/25 flex flex-col justify-center px-6">
                 {promo.headline && (
@@ -327,7 +339,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
             )}
           </div>
         </div>
-      )}
+      ))}
 
       <div className="px-4 pt-4">
         <div className="rounded-2xl bg-gradient-to-br from-[#1a1a1a] to-[#3a3a3a] text-white p-6">
