@@ -385,15 +385,14 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           <User className="w-5 h-5" />
           <span className="text-[10px] font-semibold">Account</span>
         </button>
-        
-          href={getDoorDashUrl()}
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          type="button"
+          onClick={() => window.open(getDoorDashUrl(), "_blank")}
           className="flex flex-col items-center gap-1 text-gray-500 hover:text-[#E4002B] transition cursor-pointer"
         >
           <ShoppingCart className="w-5 h-5" />
           <span className="text-[10px] font-semibold">Order</span>
-        </a>
+        </button>
       </div>
 
       <AnimatePresence>
@@ -654,14 +653,13 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                 <span className="text-[10px] font-mono text-gray-400 block">{redirectingProduct.category} • {redirectingProduct.size}</span>
               </div>
               <div className="space-y-3 pt-2">
-                
-                  href={getDoorDashUrl(redirectingProduct)}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <button
+                  type="button"
+                  onClick={() => window.open(getDoorDashUrl(redirectingProduct), "_blank")}
                   className="w-full py-3 bg-[#FF3008] hover:bg-[#E52B07] text-white font-bold text-xs uppercase tracking-widest transition flex items-center justify-center gap-2 shadow-lg"
                 >
                   Click Here if Not Redirected
-                </a>
+                </button>
                 <button
                   type="button"
                   onClick={() => setIsRedirectModalOpen(false)}
