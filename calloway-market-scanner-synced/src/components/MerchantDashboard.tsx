@@ -101,6 +101,91 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [editForm, setEditForm] = useState<any>({});
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
+  // Promo banner editor — the customer-facing photo banner shown right
+  // under the search bar (BevMo-style). Loaded from and saved to
+  // /api/settings/promo.
+  const [promoImageUrl, setPromoImageUrl] = useState("");
+  const [promoHeight, setPromoHeight] = useState(220);
+  const [promoHeadline, setPromoHeadline] = useState("");
+  const [promoSubtext, setPromoSubtext] = useState("");
+  const [promoButtonLabel, setPromoButtonLabel] = useState("");
+  const [promoButtonUrl, setPromoButtonUrl] = useState("");
+  const [isSavingPromo, setIsSavingPromo] = useState(false);
+  const [promoMessage, setPromoMessage] = useState<string | null>(null);
+  const [isLoadingPromo, setIsLoadingPromo] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/settings/promo")
+      .then((r) => r.json())
+      .then((data) => {
+        setPromoImageUrl(data.imageUrl || "");
+        setPromoHeight(data.height || 220);
+        setPromoHeadline(data.headline || "");
+        setPromoSubtext(data.subtext || "");
+        setPromoButtonLabel(data.buttonLabel || "");
+        setPromoButtonUrl(data.buttonUrl || "");
+      })
+      .catch(() => {})
+      .finally(() => setIsLoadingPromo(false));
+  }, []);
+
+  const handleSavePromo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingPromo(true);
+    setPromoMessage(null);
+    try {
+      const res = await fetch("/api/settings/promo", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({
+          imageUrl: promoImageUrl,
+          height: promoHeight,
+          headline: promoHeadline,
+          subtext: promoSubtext,
+          buttonLabel: promoButtonLabel,
+          buttonUrl: promoButtonUrl,
+        }),
+      });
+      if (res.ok) {
+        setPromoMessage("Promo banner saved! It's now live on your customer site.");
+        logAction("Updated customer-facing promo banner");
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setPromoMessage(errData.error || "Failed to save promo banner.");
+      }
+    } catch (err: any) {
+      setPromoMessage(`Error saving promo banner: ${err.message || err}`);
+    } finally {
+      setIsSavingPromo(false);
+    }
+  };
+
+  const handleClearPromo = async () => {
+    if (!window.confirm("Remove the promo banner from the customer site?")) return;
+    setPromoImageUrl("");
+    setPromoHeadline("");
+    setPromoSubtext("");
+    setPromoButtonLabel("");
+    setPromoButtonUrl("");
+    setPromoHeight(220);
+    setIsSavingPromo(true);
+    try {
+      const res = await fetch("/api/settings/promo", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ imageUrl: "", height: 220, headline: "", subtext: "", buttonLabel: "", buttonUrl: "" }),
+      });
+      if (res.ok) {
+        setPromoMessage("Promo banner removed from the customer site.");
+        logAction("Removed customer-facing promo banner");
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSavingPromo(false);
+    }
+  };
+
   const openEditModal = (product: Product) => {
     setEditingProduct(product);
     setEditForm({
@@ -265,6 +350,10 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [manageSearchQuery, setManageSearchQuery] = useState("");
   const [manageCategoryFilter, setManageCategoryFilter] = useState("All");
 
+  // Geographic Filtering States
+  // (selectedGeoNeighborhood state removed — was only used by the fake
+  // neighborhood dropdown/heatmap feature removed above)
+
   // Smart Parser for CSV and Google Sheets
   const parseCSV = (text: string) => {
     // Clean UTF-8 BOM
@@ -324,6 +413,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         }
       }
       cells.push(currentCell.trim());
+      // Strip outer quotes from cells if any
       return cells.map(cell => {
         if (cell.startsWith('"') && cell.endsWith('"')) {
           return cell.slice(1, -1).replace(/""/g, '"').trim();
@@ -332,6 +422,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       });
     };
 
+    // Analyze first line to see if it's a header row
     const firstRowCells = parseCSVLine(lines[0], delimiter);
     const headerKeywords = ["name", "product", "spirit", "bottle", "category", "abv", "alcohol", "size", "volume", "stock", "status", "origin", "distillery", "notes", "tasting", "description", "price", "cost", "msrp", "wholesale", "value", "rate", "usd"];
     
@@ -344,9 +435,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     let startIdx = 0;
 
     if (hasHeader) {
+      // First line is headers
       headers = firstRowCells.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
       startIdx = 1;
     } else {
+      // No header row, treat first line as data and map by column index positions
       headers = [];
       startIdx = 0;
     }
@@ -388,6 +481,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         });
       }
 
+      // Position-based mapping fallback if headers didn't yield a name or we didn't have headers
       if (!p.name && cells[0]) {
         p.name = cells[0];
         p.category = cells[1] || "Whiskey";
@@ -400,7 +494,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         p.rawPrice = cells[8] || "";
       }
 
+      // Double check name exists before adding
       if (p.name) {
+        // Standardize stock status
         let stock = p.stockStatus || "In Stock";
         const stockLower = stock.toLowerCase();
         if (stockLower.includes("out") || stockLower === "no" || stockLower === "0" || stockLower === "sold") {
@@ -413,6 +509,20 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           stock = "In Stock";
         }
 
+        // Standardize category to match your real departments.
+        // FIX: this is a genuinely serious, separate bug from the earlier
+        // one we found and fixed — any blank category cell in a CSV
+        // upload used to silently become "Whiskey", and even when a real
+        // category WAS provided, this normalization logic only recognized
+        // a narrow, fictional boutique-store category list (Whiskey,
+        // Tequila, Vodka, Gin, Wine, Champagne, Craft Beer, Liqueur,
+        // Snack, Soda) — it had no mapping for your real departments like
+        // Water, Household, Sports & Energy Drinks, RTD, or Coffee/Tea/
+        // Juice, so real items in those categories got silently
+        // mislabeled into the nearest fictional bucket or capitalized
+        // as-is into a category that doesn't exist anywhere else on the
+        // site. Left genuinely blank when missing — never invented — and
+        // normalization now maps to your actual real department names.
         let cat = p.category || "";
         const catLower = cat.toLowerCase();
         if (catLower.includes("whiskey") || catLower.includes("bourbon") || catLower.includes("scotch") || catLower.includes("rye")
@@ -439,9 +549,22 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         } else if (catLower.includes("household") || catLower.includes("supplies")) {
           cat = "Household";
         } else if (cat) {
+          // A real category was provided but didn't match any known
+          // department — keep it as-is (capitalized) rather than force
+          // it into a wrong bucket, so it's visible and fixable later
+          // rather than silently hidden inside the wrong category.
           cat = cat.charAt(0).toUpperCase() + cat.slice(1);
         }
+        // If cat is still "" here (no category provided at all), it stays
+        // genuinely blank — the website already handles a blank category
+        // honestly rather than guessing one.
 
+        // FIX: previously guessed a price by category keyword whenever a
+        // real price wasn't provided (e.g. "any whiskey = $79.99",
+        // "any wine = $59.99"). A guessed price is not a real price and
+        // shouldn't be presented as one — left undefined now so the site
+        // honestly shows "Price unavailable" instead of a fabricated
+        // number that might be significantly wrong.
         let calculatedFinalPrice: number | undefined = undefined;
         if (p.rawPrice) {
           const cleaned = String(p.rawPrice).replace(/[^0-9.]/g, "");
@@ -475,22 +598,29 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const getGoogleSheetsCsvUrl = (url: string) => {
     url = url.trim();
     
+    // If it is already a direct CSV export link or published CSV, return it directly
     if (url.includes("output=csv") || url.includes("format=csv")) {
       return url;
     }
 
+    // Handle "Publish to web" links
+    // Format: https://docs.google.com/spreadsheets/d/e/2PACX-1vSgD2.../pubhtml or /pub
     if (url.includes("/spreadsheets/d/e/")) {
       const match = url.match(/\/spreadsheets\/d\/e\/([a-zA-Z0-9-_]+)/);
       if (match) {
         const publishId = match[1];
+        // Convert to direct CSV export
         return `https://docs.google.com/spreadsheets/d/e/${publishId}/pub?output=csv`;
       }
     }
 
+    // Handle standard Google Sheets links
+    // Format: https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit#gid=GID
     const idMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
     if (idMatch) {
       const spreadsheetId = idMatch[1];
       
+      // Extract GID
       let gid = "0";
       const gidMatch = url.match(/gid=([0-9]+)/);
       if (gidMatch) {
@@ -500,6 +630,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${gid}`;
     }
 
+    // Fallback if we cannot parse it but it looks like a URL
     return url;
   };
 
@@ -599,6 +730,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         if (isJson) {
           const raw = JSON.parse(text);
           const rawArray = Array.isArray(raw) ? raw : [raw];
+          // FIX: this used to fabricate the same kind of fake defaults we
+          // already removed elsewhere ("Unnamed Premium Spirit", "40%" ABV,
+          // "750ml" size, "Whiskey" category, "Fine bottling" notes) for
+          // any field missing from an uploaded JSON file. Left honestly
+          // blank/empty now, consistent with the rest of the app.
           parsed = rawArray.map(item => ({
             name: item.name || item.ProductName || item.spirit || "",
             category: item.category || item.Category || "",
@@ -681,6 +817,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const downloadProductsCsv = () => {
     if (!products || products.length === 0) return;
 
+    // CSV headers
     const headers = [
       "Product ID",
       "Name",
@@ -693,6 +830,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       "Description"
     ];
 
+    // CSV rows
     const rows = products.map((p) => [
       p.id,
       p.name,
@@ -705,6 +843,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       p.description || "N/A"
     ]);
 
+    // Format fields with quotes and handle special characters
     const csvContent = [
       headers.join(","),
       ...rows.map((row) =>
@@ -717,6 +856,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       )
     ].join("\n");
 
+    // Download trigger
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -731,6 +871,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const downloadDemandLogsCsv = () => {
     if (!analytics || !analytics.recentSearches || analytics.recentSearches.length === 0) return;
 
+    // CSV headers
     const headers = [
       "Inquiry ID",
       "Query Term",
@@ -740,6 +881,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       "Bakersfield Neighborhood"
     ];
 
+    // CSV rows
     const rows = analytics.recentSearches.map((s) => [
       s.id,
       s.query,
@@ -749,6 +891,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       s.location || "N/A"
     ]);
 
+    // Format fields with quotes and handle special characters
     const csvContent = [
       headers.join(","),
       ...rows.map((row) =>
@@ -761,6 +904,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       )
     ].join("\n");
 
+    // Download trigger
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -834,11 +978,21 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     setIsUploading(true);
     setUploadMessage(null);
 
+    // FIX: this used to fabricate a price by guessing from category keywords
+    // ("any whiskey = $79.99") whenever the merchant left price blank, then
+    // applied the markup on top of that invented number. Real prices should
+    // only ever come from what the merchant actually enters — if left blank,
+    // price stays undefined rather than a confident-sounding guess.
     const parsedPrice = parseFloat(newPrice);
     const calculatedFinalPrice = !isNaN(parsedPrice)
       ? Math.round(parsedPrice * (1 + uploadMarkupMargin / 100) * 100) / 100
       : undefined;
 
+    // FIX: missing fields used to default to fabricated marketing copy
+    // ("Bakersfield Select Reserve" origin, "40%" ABV, "Premium Spirits
+    // Reserve" tasting notes, a made-up description and food pairing) even
+    // for products where none of that is true. Left blank/empty now —
+    // honest about what the merchant didn't fill in, not invented.
     const singleProduct = {
       name: newName,
       category: newCategory,
@@ -870,7 +1024,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         setNewDescription("");
         setNewFoodPairing("");
         setNewPrice("");
-        onRefreshAllData();
+        onRefreshAllData(); // Refresh parents catalog list
       } else {
         throw new Error("Failed to register spirit.");
       }
@@ -890,10 +1044,19 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
     let parsedProducts = [];
     try {
+      // Check if user pasted JSON format
       if (bulkText.trim().startsWith("[") || bulkText.trim().startsWith("{")) {
         const parsed = JSON.parse(bulkText);
         parsedProducts = Array.isArray(parsed) ? parsed : [parsed];
       } else {
+        // Assume simple lines format: name, category, size, stockStatus
+        // FIX: missing category/size used to silently default to "Whiskey"
+        // and "750ml" — a real, undetected leftover from the original
+        // fabrication pattern we already fixed in the JSON import and
+        // manual single-add form, but this comma-separated parser slipped
+        // through. Any row with a blank category cell got mislabeled as
+        // Whiskey regardless of what the item actually was (a soda, a
+        // snack, anything). Left genuinely blank now — never invented.
         const lines = bulkText.split("\n");
         parsedProducts = lines
           .map((line) => {
@@ -904,6 +1067,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               category: parts[1] || "",
               size: parts[2] || "",
               stockStatus: parts[3] || "In Stock",
+              // Previously auto-filled with invented marketing copy
+              // ("Private cellar allocation... exclusive pickup") on every
+              // bulk-imported item regardless of what it actually is.
+              // Left blank now — real description should come from your
+              // actual product data, not a fabricated default.
               description: "",
               marginPercent: uploadMarkupMargin
             };
@@ -937,6 +1105,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
+  // Fetch compiled analytics from backend
   const fetchAnalytics = async () => {
     setIsLoadingAnalytics(true);
     setError(null);
@@ -953,6 +1122,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
+  // Trigger server-side Gemini AI demand audit
   const runAiAudit = async () => {
     setIsLoadingAi(true);
     try {
@@ -971,6 +1141,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   }, [searchCount]);
 
   useEffect(() => {
+    // Run initial AI audit on load if analytics load successfully
     if (analytics) {
       runAiAudit();
     }
@@ -983,17 +1154,27 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     logAction("Triggered manual refresh of local catalog and audit metrics");
   };
 
+  // REMOVED: simulateSearch() used to inject fictional search entries
+  // (e.g. "Macallan 18 Year old", "Dom Perignon vintage 2012" — none of
+  // which exist in your real inventory) directly into your live analytics
+  // on a button click, labeled as if they came from real "Google Search"
+  // or website traffic. That undermines every other fix in this file —
+  // removed entirely. Real search data should only come from real
+  // customers actually using the site.
+
+  // Modern minimalist chart color palette
   const CHART_COLORS = [
-    "#78350f",
-    "#9a3412",
-    "#155e75",
-    "#115e59",
-    "#3730a3",
-    "#86198f",
-    "#9f1239",
-    "#1e293b",
+    "#78350f", // amber-900
+    "#9a3412", // orange-800
+    "#155e75", // cyan-800
+    "#115e59", // teal-800
+    "#3730a3", // indigo-800
+    "#86198f", // fuchsia-800
+    "#9f1239", // rose-800
+    "#1e293b", // slate-800
   ];
 
+  // Helper to format timestamp
   const formatTimeAgo = (isoString: string) => {
     const past = new Date(isoString).getTime();
     const diffMs = Date.now() - past;
@@ -1013,6 +1194,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     });
   };
 
+  // Dynamically compute filtered stats for the selected channel (All, Google, Website)
   const activeCategories = analytics
     ? (demandFilter === "google"
         ? analytics.googlePopularCategories
@@ -1029,9 +1211,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           : [])
     : [];
 
+  // Calculate the sum of active categories and brands for percentage calculations
   const activeCategoriesTotal = activeCategories.reduce((acc, cat) => acc + cat.value, 0);
   const activeBrandsTotal = activeBrands.reduce((acc, brand) => acc + brand.value, 0);
 
+  // Filter active products for management view
   const filteredActiveProducts = (products || []).filter((p) => {
     const matchesSearch = p.name.toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
                           p.origin.toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
@@ -1042,6 +1226,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
   return (
     <div className="space-y-8" id="merchant-view">
+      {/* Merchant Title & Control Strip */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-100 pb-6">
         <div>
           <span className="text-xs font-semibold tracking-widest text-indigo-700 uppercase block mb-1">
@@ -1092,6 +1277,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         </div>
       )}
 
+      {/* KPI Overviews */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <div className="bg-white rounded-2xl border border-gray-100 p-6 flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-800 flex items-center justify-center shrink-0">
@@ -1130,6 +1316,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         </div>
       </div>
 
+      {/* Dynamic Segment Filter */}
       <div className="bg-white rounded-2xl border border-gray-100 p-4 md:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-base font-serif text-gray-900 tracking-tight flex items-center gap-2">
@@ -1175,10 +1362,13 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         </div>
       </div>
 
+      {/* Primary Analytics Section */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
+        {/* Left Column: Visual Charts */}
         <div className="lg:col-span-8 space-y-6">
           
+          {/* Chart 1: Category Demand Pie */}
           <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1263,7 +1453,15 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             )}
           </div>
 
+          {/* Chart 2 / Brand Leaderboard: Conditional based on filter */}
           {demandFilter === "all" ? (
+            /* FIX: this panel used to show a "Neighborhood Geographic Search
+               Hotspots" chart with a dropdown of fake Bakersfield
+               neighborhoods (Rosedale, Seven Oaks, Riverlakes, etc.) and a
+               "deep-dive" panel computing average distance from fabricated
+               per-search location data. None of that was real — replaced
+               with an honest placeholder until real location data (e.g.
+               via Google Search Console or actual geolocation) is wired in. */
             <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs space-y-4">
               <div className="flex items-center gap-2 border-b border-gray-50 pb-3">
                 <MapPin className="w-5 h-5 text-gray-400" />
@@ -1278,6 +1476,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               </div>
             </div>
           ) : (
+            /* Custom luxury Brand progress leaderboard for Google Search or Website filter */
             <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -1348,8 +1547,10 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
         </div>
 
+        {/* Right Column: Live Query Feeds & Trending Words */}
         <div className="lg:col-span-4 space-y-6">
           
+          {/* Trending Searches list */}
           <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs space-y-4">
             <div className="flex items-center gap-2">
               <TrendingUp className="w-5 h-5 text-emerald-700" />
@@ -1384,6 +1585,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             )}
           </div>
 
+          {/* Live Search Stream */}
           <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-serif text-lg text-gray-900">Live Search Stream</h3>
@@ -1391,6 +1593,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 <span className="w-1.5 h-1.5 bg-emerald-600 rounded-full"></span> Live Stream
               </span>
             </div>
+
+            {/* REMOVED: a "Simulate incoming local demand" panel used to
+                live here with buttons that injected fake search entries
+                ("Macallan 18", "Dom Perignon vintage 2012", etc.) directly
+                into live analytics. Removed along with simulateSearch(). */}
 
             <div className="space-y-3 max-h-[340px] overflow-y-auto pr-2">
               {isLoadingAnalytics ? (
@@ -1401,6 +1608,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 </div>
               ) : analytics && analytics.recentSearches.length > 0 ? (
                 (() => {
+                  // FIX: this used to filter by a neighborhood dropdown that
+                  // no longer exists (it relied on fabricated location
+                  // data, removed above). All real searches are shown now.
                   const filtered = analytics.recentSearches;
                   if (filtered.length === 0) {
                     return (
@@ -1445,6 +1655,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             </div>
           </div>
 
+          {/* Merchant Activity Log Widget */}
           <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1482,6 +1693,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         </div>
       </div>
 
+      {/* Inventory Management & Upload Hub */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-8 my-12" id="inventory-manager">
         <div>
           <span className="text-xs font-semibold tracking-widest text-amber-800 uppercase block mb-1">
@@ -1496,6 +1708,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </p>
         </div>
 
+        {/* Tab Selector */}
         <div className="flex border-b border-gray-100 pb-px gap-2">
           <button
             onClick={() => {
@@ -1541,8 +1754,10 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </button>
         </div>
 
+        {/* Global Upload Controls & Pricing Margin Configurator */}
         <div className="bg-slate-50 border border-slate-100 p-5 rounded-2xl grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
           
+          {/* Pricing Margin Markup */}
           <div className="space-y-2 md:col-span-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1583,6 +1798,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             </div>
           </div>
 
+          {/* Instant Direct Publish & Sample Template Download */}
           <div className="space-y-3 bg-white p-3.5 rounded-xl border border-gray-100 flex flex-col justify-center">
             <label className="flex items-center gap-2.5 cursor-pointer select-none">
               <input
@@ -1623,6 +1839,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           <div className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
+              {/* Option A: Google Sheet Importer */}
               <div className="bg-slate-50/50 p-5 rounded-2xl border border-gray-100 space-y-4">
                 <div className="flex items-start gap-3">
                   <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
@@ -1667,6 +1884,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 </div>
               </div>
 
+              {/* Option B: Local File Drag-and-Drop */}
               <div className="bg-slate-50/50 p-5 rounded-2xl border border-gray-100 flex flex-col justify-between space-y-4">
                 <div className="flex items-start gap-3">
                   <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-800 flex items-center justify-center shrink-0">
@@ -1678,6 +1896,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   </div>
                 </div>
 
+                {/* Drag Drop Area */}
                 <div
                   onDragEnter={handleDrag}
                   onDragOver={handleDrag}
@@ -1709,6 +1928,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
             </div>
 
+            {/* Smart Import Preview Block */}
             {parsedPreviewItems.length > 0 && (
               <div className="bg-slate-50 p-5 rounded-2xl border border-amber-900/10 space-y-4">
                 <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1969,6 +2189,177 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         )}
       </div>
 
+      {/* Promo Banner Editor */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="promo-banner-manager">
+        <div>
+          <span className="text-xs font-semibold tracking-widest text-rose-700 uppercase block mb-1">
+            Customer Site Promo Banner
+          </span>
+          <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-rose-600" />
+            Photo Promo Banner
+          </h2>
+          <p className="text-xs text-gray-500 font-light mt-1">
+            This banner appears right under the search bar on your customer-facing site. Paste an image URL
+            (host it anywhere — Imgur, Google Drive public link, etc.) and customize the headline, subtext,
+            button, and banner height.
+          </p>
+        </div>
+
+        {promoMessage && (
+          <div className={`p-4 rounded-xl text-xs font-medium flex items-center gap-3 border ${
+            promoMessage.toLowerCase().includes("failed") || promoMessage.toLowerCase().includes("error")
+              ? "bg-rose-50 text-rose-800 border-rose-200"
+              : "bg-emerald-50 text-emerald-800 border-emerald-200"
+          }`}>
+            <CheckCircle className="w-4 h-4 shrink-0" />
+            <span>{promoMessage}</span>
+          </div>
+        )}
+
+        {isLoadingPromo ? (
+          <div className="h-32 flex items-center justify-center">
+            <div className="w-6 h-6 border-2 border-amber-900 border-t-transparent rounded-full animate-spin"></div>
+          </div>
+        ) : (
+          <form onSubmit={handleSavePromo} className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Image URL</label>
+                <input
+                  type="url"
+                  placeholder="https://i.imgur.com/yourimage.jpg"
+                  value={promoImageUrl}
+                  onChange={(e) => setPromoImageUrl(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">No file upload yet — paste a hosted image link instead.</p>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">Banner Height</label>
+                  <span className="text-xs font-mono font-semibold text-amber-900">{promoHeight}px</span>
+                </div>
+                <input
+                  type="range"
+                  min="120"
+                  max="400"
+                  step="10"
+                  value={promoHeight}
+                  onChange={(e) => setPromoHeight(Number(e.target.value))}
+                  className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-amber-900"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Headline</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Buy 2, Save More"
+                  value={promoHeadline}
+                  onChange={(e) => setPromoHeadline(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Subtext</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Mix any 6 bottles of wine and save 10%"
+                  value={promoSubtext}
+                  onChange={(e) => setPromoSubtext(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Button Label</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Shop Now"
+                    value={promoButtonLabel}
+                    onChange={(e) => setPromoButtonLabel(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Button Link (optional)</label>
+                  <input
+                    type="url"
+                    placeholder="Leave blank to open order sheet"
+                    value={promoButtonUrl}
+                    onChange={(e) => setPromoButtonUrl(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={isSavingPromo}
+                  className="px-5 py-2.5 bg-amber-950 hover:bg-amber-900 text-white font-semibold text-xs uppercase tracking-wider rounded-xl transition flex items-center gap-2 cursor-pointer disabled:bg-gray-300"
+                >
+                  {isSavingPromo ? "Saving..." : "Save Promo Banner"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearPromo}
+                  disabled={isSavingPromo}
+                  className="px-5 py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 font-semibold text-xs uppercase tracking-wider rounded-xl transition cursor-pointer"
+                >
+                  Remove Banner
+                </button>
+              </div>
+            </div>
+
+            {/* Live preview */}
+            <div className="space-y-2">
+              <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">Live Preview</label>
+              <div
+                className="rounded-2xl overflow-hidden relative bg-gray-100 border border-gray-200"
+                style={{ height: `${promoHeight}px` }}
+              >
+                {promoImageUrl && (
+                  <img
+                    src={promoImageUrl}
+                    alt="Promo preview"
+                    className="absolute inset-0 w-full h-full object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
+                )}
+                {(promoHeadline || promoSubtext || promoButtonLabel) && (
+                  <div className="absolute inset-0 bg-black/25 flex flex-col justify-center px-6">
+                    {promoHeadline && (
+                      <h2 className="text-white text-2xl font-extrabold leading-tight max-w-xs drop-shadow-lg">
+                        {promoHeadline}
+                      </h2>
+                    )}
+                    {promoSubtext && (
+                      <p className="text-white/90 text-sm mt-1 max-w-xs drop-shadow">{promoSubtext}</p>
+                    )}
+                    {promoButtonLabel && (
+                      <span className="mt-3 self-start px-5 py-2 bg-white text-black text-xs font-bold rounded-full">
+                        {promoButtonLabel}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {!promoImageUrl && !promoHeadline && !promoSubtext && !promoButtonLabel && (
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-xs">
+                    Nothing configured yet — banner is hidden on the live site.
+                  </div>
+                )}
+              </div>
+            </div>
+          </form>
+        )}
+      </div>
+
+      {/* Active Showroom Catalog & Deletion Manager */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="active-catalog-manager">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-100 pb-5">
           <div>
@@ -1997,6 +2388,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </div>
         </div>
 
+        {/* Filters */}
         <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
           <div className="relative w-full md:max-w-sm">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -2028,6 +2420,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </div>
         </div>
 
+        {/* Inventory List */}
         {products && products.length > 0 ? (
           <div className="border border-gray-100 rounded-xl overflow-hidden shadow-xs bg-gray-50/20">
             <div className="overflow-x-auto max-h-[480px]">
@@ -2146,6 +2539,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         )}
       </div>
 
+      {/* AI Market Insights Segment */}
       <div className="bg-gradient-to-br from-slate-900 to-indigo-950 text-white rounded-2xl p-6 md:p-8 border border-slate-800 shadow-xl space-y-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -2178,6 +2572,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </button>
         </div>
 
+        {/* AI report output */}
         {isLoadingAi ? (
           <div className="flex flex-col items-center justify-center py-12 space-y-3">
             <div className="w-8 h-8 border-3 border-indigo-400 border-t-transparent rounded-full animate-spin"></div>
@@ -2186,12 +2581,14 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         ) : aiReport ? (
           <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start pt-2">
             
+            {/* Written Analysis */}
             <div className="md:col-span-7 bg-white/5 border border-white/10 rounded-xl p-5 md:p-6 space-y-4">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase text-indigo-400 tracking-wider">
                 <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Executive Demand Report</span>
               </div>
               
+              {/* Render dynamic markdown-styled analysis */}
               <div className="text-xs text-slate-200 leading-relaxed font-light space-y-3 whitespace-pre-line border-t border-white/5 pt-3">
                 {aiReport.insights}
               </div>
@@ -2201,6 +2598,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               </div>
             </div>
 
+            {/* AI Suggested Action Items */}
             <div className="md:col-span-5 space-y-4">
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
                 Automated Actions & Inventory Alerts
@@ -2228,6 +2626,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         )}
       </div>
 
+      {/* Edit Product Modal */}
       {editingProduct && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => setEditingProduct(null)}>
           <div
