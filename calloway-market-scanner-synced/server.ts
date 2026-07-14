@@ -1023,6 +1023,58 @@ app.post("/api/email-signup/broadcast", requireMerchantAuth, async (req, res) =>
     res.status(500).json({ error: err.message || "Broadcast failed." });
   }
 });
+// Promo banner settings — a single configurable banner (image, headline,
+// subtext, button) shown on the customer site, editable from the merchant
+// dashboard. Stored as one row in a generic key/value settings table so we
+// don't need a new dedicated table for every future setting.
+app.get("/api/settings/promo", async (req, res) => {
+  const defaults = {
+    imageUrl: "",
+    height: 220,
+    headline: "",
+    subtext: "",
+    buttonLabel: "",
+    buttonUrl: "",
+  };
+  if (!supabase) return res.json(defaults);
+  try {
+    const { data, error } = await supabase
+      .from("site_settings")
+      .select("value")
+      .eq("key", "promo_banner")
+      .maybeSingle();
+    if (error) throw error;
+    res.json(data ? { ...defaults, ...data.value } : defaults);
+  } catch (err) {
+    console.error("Failed to load promo banner settings:", err);
+    res.json(defaults);
+  }
+});
+
+app.patch("/api/settings/promo", requireMerchantAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(503).json({ error: "Database not configured." });
+  }
+  const { imageUrl, height, headline, subtext, buttonLabel, buttonUrl } = req.body;
+  const value = {
+    imageUrl: imageUrl || "",
+    height: Number(height) || 220,
+    headline: headline || "",
+    subtext: subtext || "",
+    buttonLabel: buttonLabel || "",
+    buttonUrl: buttonUrl || "",
+  };
+  try {
+    const { error } = await supabase
+      .from("site_settings")
+      .upsert({ key: "promo_banner", value }, { onConflict: "key" });
+    if (error) throw error;
+    res.json({ success: true, value });
+  } catch (err: any) {
+    console.error("Failed to save promo banner settings:", err);
+    res.status(500).json({ error: err.message || "Failed to save promo settings." });
+  }
+});
 
 app.post("/api/proxy-sheet", requireMerchantAuth, async (req, res) => {
   const { url } = req.body;
