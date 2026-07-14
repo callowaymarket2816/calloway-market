@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Search, SlidersHorizontal, MapPin, Inbox, CheckCircle2, ChevronRight, FileText, Info, ShoppingBag, Trash2, Wine, Martini, Beer, Zap, Cookie, CupSoda, Package, Droplet, Coffee } from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
+import { Search, MapPin, Inbox, CheckCircle2, ChevronRight, ChevronLeft, ChevronUp, FileText, Info, ShoppingBag, ShoppingCart, Menu, Home, User, Wine, Martini, Beer, Zap, Cookie, CupSoda, Package, Droplet, Coffee } from "lucide-react";
 import { Product } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import callowayLogo from "../assets/calloway-logo.png";
@@ -12,18 +12,6 @@ interface CustomerCatalogProps {
 
 export default function CustomerCatalog({ products, isLoading, onSearchLog }: CustomerCatalogProps) {
   const triggerSearchFetch = () => {};
-
-  const formatLocalTimeAgo = (isoString: string) => {
-    const past = new Date(isoString).getTime();
-    const diffMs = Date.now() - past;
-    const diffMins = Math.round(diffMs / 60000);
-    
-    if (diffMins < 1) return "Just now";
-    if (diffMins < 60) return `${diffMins}m ago`;
-    const diffHrs = Math.floor(diffMins / 60);
-    if (diffHrs < 24) return `${diffHrs}h ago`;
-    return new Date(isoString).toLocaleDateString();
-  };
 
   const DOORDASH_STORE_ID = "34675059";
   const GRUBHUB_RESTAURANT_SLUG = "calloway-market-2816-calloway-dr-bakersfield";
@@ -38,8 +26,14 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
   };
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState<string>("All");
-  const [selectedSubcategory, setSelectedSubcategory] = useState<string>("All");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  useEffect(() => {
+    const handleScroll = () => setShowScrollTop(window.scrollY > 500);
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
 
   const [signupEmail, setSignupEmail] = useState("");
   const [signupStatus, setSignupStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
@@ -72,20 +66,12 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
   };
 
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  
   const [redirectingProduct, setRedirectingProduct] = useState<Product | null>(null);
   const [isRedirectModalOpen, setIsRedirectModalOpen] = useState(false);
-
   const [isInquiring, setIsInquiring] = useState(false);
   const [inquiryName, setInquiryName] = useState("");
   const [inquiryContact, setInquiryContact] = useState("");
   const [inquirySubmitted, setInquirySubmitted] = useState(false);
-
-  const [cart, setCart] = useState<Product[]>([]);
-  const [isCartOpen, setIsCartOpen] = useState(false);
-  const [cartName, setCartName] = useState("");
-  const [cartContact, setCartContact] = useState("");
-  const [cartSubmitted, setCartSubmitted] = useState(false);
 
   const handleAddToDoorDash = (product: Product) => {
     onSearchLog(`DoorDash Redirect: ${product.name}`, product.category);
@@ -99,70 +85,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     onSearchLog(`Grubhub Redirect: ${product.name}`, product.category);
     triggerSearchFetch();
     window.open(getGrubhubUrl(product), "_blank");
-  };
-
-  const handleAddToCart = (product: Product) => {
-    handleAddToDoorDash(product);
-  };
-
-  const handleRemoveFromCart = (productId: string) => {
-    setCart((prev) => prev.filter((item) => item.id !== productId));
-  };
-
-  const handleCartSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!cartName.trim() || !cartContact.trim() || cart.length === 0) return;
-    cart.forEach((bottle) => {
-      onSearchLog(`Reserve Cart Order: ${bottle.name}`, bottle.category);
-    });
-    setCartSubmitted(true);
-    setTimeout(() => {
-      setCart([]);
-      setIsCartOpen(false);
-      setCartSubmitted(false);
-      setCartName("");
-      setCartContact("");
-    }, 5000);
-  };
-
-  const categories = ["All", ...Array.from(new Set(products.map((p) => p.category).filter(Boolean)))];
-
-  const subcategories = selectedCategory === "All"
-    ? []
-    : ["All", ...Array.from(new Set(
-        products
-          .filter((p) => p.category === selectedCategory && p.subcategory)
-          .map((p) => p.subcategory as string)
-      ))];
-
-  const filteredProducts = products.filter((product) => {
-    const matchesCategory = selectedCategory === "All" || product.category === selectedCategory;
-    const matchesSubcategory = selectedSubcategory === "All" || product.subcategory === selectedSubcategory;
-    const term = searchTerm.toLowerCase();
-    const matchesSearch =
-      product.name.toLowerCase().includes(term) ||
-      (product.description && product.description.toLowerCase().includes(term)) ||
-      (product.subcategory && product.subcategory.toLowerCase().includes(term)) ||
-      (product.origin && product.origin.toLowerCase().includes(term)) ||
-      product.tastingNotes.some((note) => note.toLowerCase().includes(term));
-    return matchesCategory && matchesSubcategory && matchesSearch;
-  });
-
-  const handleSearchSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (searchTerm.trim().length >= 2) {
-      onSearchLog(searchTerm.trim(), selectedCategory);
-      triggerSearchFetch();
-    }
-  };
-
-  const handleCategorySelect = (category: string) => {
-    setSelectedCategory(category);
-    setSelectedSubcategory("All");
-    if (category !== "All") {
-      onSearchLog(`Browse Category: ${category}`, category);
-      triggerSearchFetch();
-    }
   };
 
   const handleInquirySubmit = (e: React.FormEvent) => {
@@ -182,18 +104,41 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     }, 4000);
   };
 
+  const categories = Array.from(new Set(products.map((p) => p.category).filter(Boolean)));
+
+  const term = searchTerm.toLowerCase();
+  const searchActive = term.trim().length >= 2;
+  const searchResults = products.filter((product) => {
+    if (!searchActive) return false;
+    return (
+      product.name.toLowerCase().includes(term) ||
+      (product.description && product.description.toLowerCase().includes(term)) ||
+      (product.subcategory && product.subcategory.toLowerCase().includes(term)) ||
+      (product.origin && product.origin.toLowerCase().includes(term)) ||
+      product.tastingNotes.some((note) => note.toLowerCase().includes(term))
+    );
+  });
+
+  const handleSearchSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (searchTerm.trim().length >= 2) {
+      onSearchLog(searchTerm.trim(), "Search");
+      triggerSearchFetch();
+    }
+  };
+
   const getStockBadgeColor = (status: Product["stockStatus"]) => {
     switch (status) {
       case "In Stock":
-        return "bg-emerald-950/40 text-emerald-300 border-emerald-500/20";
+        return "bg-emerald-50 text-emerald-700 border-emerald-200";
       case "Limited Stock":
-        return "bg-amber-950/40 text-amber-300 border-amber-500/20";
+        return "bg-amber-50 text-amber-700 border-amber-200";
       case "Special Order Only":
-        return "bg-indigo-950/40 text-indigo-300 border-indigo-500/20";
+        return "bg-indigo-50 text-indigo-700 border-indigo-200";
       case "Temporarily Out of Stock":
-        return "bg-rose-950/40 text-rose-300 border-rose-500/20";
+        return "bg-rose-50 text-rose-700 border-rose-200";
       default:
-        return "bg-[#121110] text-[#F4F1ED]/60 border-[#F4F1ED]/10";
+        return "bg-gray-50 text-gray-600 border-gray-200";
     }
   };
 
@@ -211,39 +156,111 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     }
   };
 
-  return (
-    <div className="space-y-12" id="customer-view">
-      <div className="text-center max-w-3xl mx-auto space-y-6 py-8">
-        <span className="text-[13px] md:text-sm font-bold tracking-[0.15em] text-[#C4A484] uppercase block">
-          Liquor, Beer &amp; Everyday Essentials
-        </span>
-        <img src={callowayLogo} alt="Calloway Market" className="h-36 md:h-48 w-auto mx-auto" />
-        <p className="text-[#F4F1ED]/70 text-base md:text-lg leading-relaxed font-light uppercase">
-          Welcome to <span className="font-medium text-[#F4F1ED]">Calloway Market</span> in Bakersfield, CA — liquor, beer, RTD, soda, water, sports & energy drinks, snacks, and more. To offer on-demand convenience and delivery, we have partnered with DoorDash and Grubhub. Selecting any item will redirect you to place your order.
-        </p>
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const scrollRow = (key: string, dir: 1 | -1) => {
+    const el = rowRefs.current.get(key);
+    if (el) el.scrollBy({ left: dir * 320, behavior: "smooth" });
+  };
 
-        <div className="max-w-md mx-auto bg-[#121110] border border-[#C4A484]/30 p-6 text-left">
+  const ProductCard = ({ product }: { product: Product }) => {
+    const IconComp = getCategoryIcon(product.iconName);
+    const displayPrice = product.storePrice ?? product.price;
+    return (
+      <div
+        onClick={() => setSelectedProduct(product)}
+        className="snap-start shrink-0 w-[220px] bg-white border border-gray-200 rounded-2xl overflow-hidden cursor-pointer hover:shadow-md transition"
+      >
+        <div className="h-36 bg-gray-50 flex items-center justify-center relative">
+          {product.featured && (
+            <span className="absolute top-2 left-2 bg-emerald-600 text-white text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full">
+              Featured
+            </span>
+          )}
+          {(product as any).imageUrl ? (
+            <img
+              src={(product as any).imageUrl}
+              alt={product.name}
+              className="w-full h-full object-contain p-3"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+          ) : (
+            <IconComp className="w-14 h-14 text-gray-300" strokeWidth={1.5} />
+          )}
+        </div>
+        <div className="p-3.5 space-y-2">
+          <h3 className="text-[15px] font-semibold text-gray-900 leading-snug line-clamp-2 min-h-[40px]">
+            {product.name}
+          </h3>
+          <div className="flex items-center justify-between">
+            {displayPrice ? (
+              <span className="text-lg font-bold text-gray-900">${displayPrice.toFixed(2)}</span>
+            ) : (
+              <span className="text-xs text-gray-400 uppercase">Price unavailable</span>
+            )}
+            <span className={`text-[9px] uppercase tracking-wide px-2 py-0.5 border rounded-full font-bold ${getStockBadgeColor(product.stockStatus)}`}>
+              {product.stockStatus === "In Stock" ? "In Stock" : "Limited"}
+            </span>
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleAddToDoorDash(product);
+            }}
+            className="w-full py-2.5 bg-[#E4002B] hover:bg-[#c40025] text-white text-sm font-bold rounded-full transition cursor-pointer"
+          >
+            Add to cart
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="-mx-4 sm:-mx-6 lg:-mx-8 -my-10 bg-white pb-24" id="customer-view">
+      <div className="bg-[#111111] text-white px-4 py-3 flex items-center justify-between">
+        <button className="p-1.5" aria-label="Menu">
+          <Menu className="w-6 h-6" />
+        </button>
+        <img src={callowayLogo} alt="Calloway Market" className="h-9 w-auto" />
+        <div className="flex items-center gap-1 text-xs font-semibold">
+          <ShoppingBag className="w-4 h-4 text-[#E4002B]" />
+          <div className="text-right leading-tight">
+            <div className="text-gray-300 text-[10px] font-normal">Delivery</div>
+            <div className="underline">Bakersfield</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="px-4 py-3 bg-white border-b border-gray-100">
+        <form onSubmit={handleSearchSubmit} className="relative">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            placeholder="Search Calloway Market"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-11 pr-4 py-3 bg-gray-100 rounded-full text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#E4002B]/30 text-sm"
+          />
+        </form>
+      </div>
+
+      <div className="px-4 pt-4">
+        <div className="rounded-2xl bg-gradient-to-br from-[#1a1a1a] to-[#3a3a3a] text-white p-6">
           {signupStatus === "success" ? (
-            <div className="text-center space-y-2">
-              <p className="text-[#C4A484] text-sm font-bold uppercase tracking-wider">You're In!</p>
-              <p className="text-[#F4F1ED]/70 text-xs">
-                {signupCouponCode && "Show this code at checkout for 10% off:"}
-              </p>
-              <p className="font-mono text-2xl text-[#F4F1ED] bg-[#0C0B0A] border border-[#C4A484]/40 py-3 select-all">
+            <div className="space-y-2">
+              <p className="text-sm font-bold uppercase tracking-wide text-[#ff6b81]">You're In!</p>
+              <p className="font-mono text-2xl bg-black/30 rounded-lg py-3 px-4 inline-block select-all">
                 {signupCouponCode}
               </p>
-              <p className="text-[#F4F1ED]/40 text-[10px]">
-                Excludes cigarettes, tobacco, lotto & lottery. Limit one per transaction. Must be 21+.
+              <p className="text-white/50 text-[11px]">
+                Show this at checkout for 10% off. Excludes cigarettes, tobacco, lotto & lottery. Must be 21+.
               </p>
             </div>
           ) : (
             <form onSubmit={handleEmailSignup} className="space-y-3">
-              <p className="text-[#F4F1ED] text-sm font-bold uppercase tracking-wider text-center">
-                Get 10% Off Your Next Visit
-              </p>
-              <p className="text-[#F4F1ED]/50 text-xs text-center normal-case">
-                Enter your email for an instant coupon code. We'll occasionally send special promos too.
-              </p>
+              <h2 className="text-xl font-extrabold leading-snug">Get 10% Off<br/>Your Next Visit</h2>
+              <p className="text-white/60 text-xs">Enter your email for an instant coupon code.</p>
               <div className="flex gap-2">
                 <input
                   type="email"
@@ -252,333 +269,132 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                   value={signupEmail}
                   onChange={(e) => setSignupEmail(e.target.value)}
                   disabled={signupStatus === "loading"}
-                  className="flex-1 px-3 py-2.5 bg-[#0C0B0A] border border-[#F4F1ED]/10 text-white text-sm normal-case focus:outline-none focus:ring-1 focus:ring-[#C4A484] focus:border-[#C4A484]"
+                  className="flex-1 px-4 py-2.5 bg-white/10 border border-white/20 rounded-full text-white placeholder-white/40 text-sm focus:outline-none focus:ring-2 focus:ring-[#E4002B]/50"
                 />
                 <button
                   type="submit"
                   disabled={signupStatus === "loading"}
-                  className="px-5 py-2.5 bg-[#C4A484] hover:bg-[#b8956f] text-black text-xs font-bold uppercase tracking-wider transition cursor-pointer disabled:opacity-50 shrink-0"
+                  className="px-5 py-2.5 bg-[#E4002B] hover:bg-[#c40025] text-white text-xs font-bold rounded-full transition cursor-pointer disabled:opacity-50 shrink-0"
                 >
                   {signupStatus === "loading" ? "..." : "Get Code"}
                 </button>
               </div>
-              {signupStatus === "error" && (
-                <p className="text-rose-400 text-xs normal-case">{signupErrorMsg}</p>
-              )}
+              {signupStatus === "error" && <p className="text-rose-300 text-xs">{signupErrorMsg}</p>}
             </form>
           )}
         </div>
       </div>
 
-      {products.some((p) => p.featured) && (
-        <div className="space-y-5">
-          <div className="flex items-center gap-2">
-            <span className="text-base font-bold tracking-[0.15em] text-[#C4A484] uppercase">
-              ⭐ Featured This Month
-            </span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-            {products.filter((p) => p.featured).map((product) => {
-              const IconComp = getCategoryIcon(product.iconName);
-              return (
-                <div
-                  key={product.id}
-                  onClick={() => setSelectedProduct(product)}
-                  className="relative bg-[#121110] border-2 border-[#C4A484] hover:border-[#F4F1ED] cursor-pointer transition group overflow-hidden shadow-[0_0_24px_rgba(196,164,132,0.25)]"
-                >
-                  <div className="absolute top-0 right-0 z-10 overflow-hidden w-28 h-28 pointer-events-none">
-                    <div className="absolute top-[18px] right-[-32px] w-[150px] rotate-45 bg-[#C4A484] text-black text-center py-1 text-[11px] font-bold uppercase tracking-widest shadow-lg">
-                      Special
-                    </div>
-                  </div>
-                  <div className="h-40 bg-gradient-to-br from-[#1c1a18] to-[#0C0B0A] flex items-center justify-center border-b border-[#C4A484]/20">
-                    {(product as any).imageUrl ? (
-                      <img
-                        src={(product as any).imageUrl}
-                        alt={product.name}
-                        className="w-full h-full object-contain p-2"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = "none";
-                        }}
-                      />
-                    ) : (
-                      <IconComp className="w-16 h-16 text-[#C4A484]/70 group-hover:text-[#C4A484] group-hover:scale-110 transition" strokeWidth={1.5} />
-                    )}
-                  </div>
-                  <div className="p-5">
-                    <p className="font-serif text-lg text-[#F4F1ED] group-hover:text-[#C4A484] transition-colors line-clamp-2 mb-3">
-                      {product.name}
-                    </p>
-                    <div className="flex items-baseline justify-between">
-                      {(product.storePrice ?? product.price) ? (
-                        <span className="text-2xl font-serif text-[#C4A484]">
-                          ${(product.storePrice ?? product.price as number).toFixed(2)}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-[#F4F1ED]/40 uppercase">Price unavailable</span>
-                      )}
-                      <span className={`text-[10px] uppercase tracking-wider px-2.5 py-1 border font-bold ${getStockBadgeColor(product.stockStatus)}`}>
-                        {product.stockStatus === "In Stock" ? "In Stock" : "Limited"}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      <div className="bg-[#121110] border border-[#F4F1ED]/10 p-6 md:p-8 space-y-8 shadow-2xl">
-        <form onSubmit={handleSearchSubmit} className="flex flex-col md:flex-row gap-4">
-          <div className="relative flex-1">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#F4F1ED]/45" />
-            <input
-              type="text"
-              placeholder="Search by item name (e.g. 'Modelo', 'Doritos', 'Jack Daniel's')..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-12 pr-4 py-4 bg-[#0C0B0A] border border-[#F4F1ED]/10 rounded-none text-[#F4F1ED] placeholder-[#F4F1ED]/40 focus:outline-none focus:ring-1 focus:ring-[#C4A484] focus:border-[#C4A484] transition text-sm font-light"
-            />
-          </div>
-          <button
-            type="submit"
-            className="px-8 py-4 bg-[#F4F1ED] hover:bg-[#F4F1ED]/90 text-black font-bold text-[11px] uppercase tracking-widest transition duration-150 shadow-lg cursor-pointer shrink-0"
-          >
-            Search Selection
-          </button>
-        </form>
-
-        <div className="space-y-3 pt-2 border-t border-[#F4F1ED]/5">
-          <div className="flex items-center gap-2 text-[11px] font-bold text-[#C4A484] uppercase tracking-[0.12em]">
-            <SlidersHorizontal className="w-3.5 h-3.5" />
-            <span>Select Category</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {categories.map((category) => {
-              const getCategoryEmoji = (cat: string) => {
-                switch (cat.toLowerCase()) {
-                  case "liquor": return "🥃";
-                  case "wine": return "🍷";
-                  case "beer": return "🍺";
-                  case "rtd": return "🧊";
-                  case "soda": return "🥤";
-                  case "water": return "💧";
-                  case "sports & energy drinks": return "⚡";
-                  case "snacks": return "🍪";
-                  case "household": return "🧴";
-                  case "coffee, tea & juice": return "☕";
-                  default: return "🔍";
-                }
-              };
-              return (
-                <button
-                  key={category}
-                  onClick={() => handleCategorySelect(category)}
-                  className={`px-4 py-2.5 text-[11px] font-bold uppercase tracking-widest border transition duration-150 cursor-pointer flex items-center gap-1.5 ${
-                    selectedCategory === category
-                      ? "bg-[#C4A484] text-black border-[#C4A484]"
-                      : "bg-[#0C0B0A] text-[#F4F1ED]/60 border-[#F4F1ED]/10 hover:text-[#F4F1ED] hover:border-[#F4F1ED]/30"
-                  }`}
-                >
-                  <span className="text-xs">{category === "All" ? "🏷️" : getCategoryEmoji(category)}</span>
-                  <span>{category}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {subcategories.length > 1 && (
-            <div className="flex flex-wrap gap-2 pt-1">
-              {subcategories.map((sub) => (
-                <button
-                  key={sub}
-                  onClick={() => setSelectedSubcategory(sub)}
-                  className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider border transition duration-150 cursor-pointer ${
-                    selectedSubcategory === sub
-                      ? "bg-[#F4F1ED] text-black border-[#F4F1ED]"
-                      : "bg-transparent text-[#F4F1ED]/50 border-[#F4F1ED]/10 hover:text-[#F4F1ED] hover:border-[#F4F1ED]/25"
-                  }`}
-                >
-                  {sub}
-                </button>
+      {searchActive && (
+        <div className="px-4 pt-6 space-y-4">
+          <h2 className="text-lg font-extrabold text-gray-900">
+            Results for "{searchTerm}"
+          </h2>
+          {searchResults.length === 0 ? (
+            <div className="bg-gray-50 rounded-2xl p-8 text-center space-y-3">
+              <Inbox className="w-8 h-8 text-gray-300 mx-auto" />
+              <p className="text-sm text-gray-500">No items found. Try a different search term.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {searchResults.map((product) => (
+                <ProductCard key={product.id} product={product} />
               ))}
             </div>
           )}
         </div>
-      </div>
+      )}
 
-      {isLoading ? (
-        <div className="flex flex-col items-center justify-center py-28 space-y-4">
-          <div className="w-8 h-8 border-2 border-[#C4A484] border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-[#F4F1ED]/50 font-light font-serif italic text-sm tracking-wider">Uncorking our reserve list...</p>
-        </div>
-      ) : filteredProducts.length === 0 ? (
-        <div className="bg-[#121110] border border-[#F4F1ED]/10 py-16 px-6 text-center max-w-lg mx-auto space-y-6 shadow-2xl">
-          <div className="w-12 h-12 bg-[#F4F1ED]/5 text-[#C4A484] rounded-full flex items-center justify-center mx-auto border border-[#F4F1ED]/10">
-            <Inbox className="w-6 h-6" />
-          </div>
-          <div className="space-y-2">
-            <h3 className="text-xl font-serif italic text-[#F4F1ED]">No Items Found</h3>
-            <p className="text-[#F4F1ED]/60 text-xs leading-relaxed font-light">
-              We couldn't find matches for "{searchTerm}" in {selectedSubcategory !== "All" ? `"${selectedSubcategory}"` : `category "${selectedCategory}"`}. Try a different search term, or browse another category.
-            </p>
-          </div>
-          <button
-            onClick={() => {
-              setSearchTerm("");
-              setSelectedCategory("All");
-              setSelectedSubcategory("All");
-            }}
-            className="text-[#C4A484] font-semibold text-xs uppercase tracking-widest hover:underline cursor-pointer"
-          >
-            Clear all filters
-          </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          {filteredProducts.map((product) => (
-            <motion.div
-              layout
-              key={product.id}
-              onClick={() => setSelectedProduct(product)}
-              className="bg-[#121110] border border-[#F4F1ED]/10 hover:border-[#C4A484]/30 transition duration-300 group flex flex-col justify-between overflow-hidden cursor-pointer shadow-xl relative"
-            >
-              <div className="p-6 pb-0">
-                {(product as any).imageUrl ? (
-                  <div className="h-44 bg-white/5 flex items-center justify-center overflow-hidden">
-                    <img
-                      src={(product as any).imageUrl}
-                      alt={product.name}
-                      className="w-full h-full object-contain p-3"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = "none";
-                      }}
-                    />
-                  </div>
-                ) : (
-                <div className={`h-44 bg-gradient-to-br ${product.imageColor} p-4 flex flex-col justify-between relative text-white overflow-hidden`}>
-                  <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]"></div>
-                  <div className="flex justify-between items-start z-10">
-                    <span className="text-[10px] font-bold tracking-[0.15em] uppercase bg-black/40 backdrop-blur-md px-2.5 py-1 rounded-none text-[#F4F1ED] border border-white/10">
-                      {product.category}
-                    </span>
-                    {product.origin && (
-                      <span className="text-xs font-medium text-amber-200/90 flex items-center gap-1">
-                        <MapPin className="w-3 h-3 text-[#C4A484]" /> {product.origin.split(",")[0]}
-                      </span>
-                    )}
-                  </div>
-                  {product.category === "Snacks" ? (
-                    <div className="h-24 w-16 mx-auto bg-white/10 backdrop-blur-sm border border-white/20 rounded-t-md rounded-b-xl shadow-xl flex flex-col items-center justify-center group-hover:scale-105 transition-transform duration-300 relative z-10">
-                      <div className="w-full h-1.5 bg-white/20 border-b border-white/10 mb-1"></div>
-                      <span className="text-[9px] font-mono font-bold tracking-[0.1em] text-white/70 uppercase">SNACK</span>
-                      <span className="text-[8px] font-mono text-white/40 mt-1">{product.size}</span>
-                    </div>
-                  ) : product.category === "Soda" ? (
-                    <div className="h-24 w-11 mx-auto bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl shadow-xl flex flex-col items-center justify-between py-2 group-hover:scale-105 transition-transform duration-300 relative z-10">
-                      <div className="w-5 h-1 bg-white/30 rounded-full"></div>
-                      <span className="text-[9px] font-mono font-bold tracking-[0.15em] text-white/70 rotate-90 my-auto">SODA</span>
-                      <span className="text-[8px] font-mono text-white/40">{product.size}</span>
-                    </div>
-                  ) : (
-                    <div className="h-24 w-12 mx-auto bg-white/10 backdrop-blur-sm border border-white/20 shadow-xl flex items-center justify-center group-hover:scale-105 transition-transform duration-300 relative z-10">
-                      <span className="text-[11px] font-bold tracking-[0.12em] text-white/60 rotate-90 whitespace-nowrap">{product.size}</span>
-                    </div>
-                  )}
-                </div>
-                )}
-              </div>
-
-              <div className="p-6 flex-1 flex flex-col justify-between space-y-5">
-                <div className="space-y-2">
-                  <h3 className="text-xl font-serif text-[#F4F1ED] group-hover:text-[#C4A484] transition-colors line-clamp-1">
-                    {product.name}
-                  </h3>
-                  {product.description && (
-                    <p className="text-xs text-[#F4F1ED]/60 font-light line-clamp-2 leading-relaxed">
-                      {product.description}
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-4 pt-2">
-                  {product.tastingNotes.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {product.tastingNotes.slice(0, 3).map((note, idx) => (
-                        <span key={idx} className="text-[10px] uppercase font-semibold tracking-wider px-2 py-1 bg-[#0C0B0A] border border-[#F4F1ED]/10 rounded-none text-[#F4F1ED]/85">
-                          {note}
-                        </span>
-                      ))}
-                      {product.tastingNotes.length > 3 && (
-                        <span className="text-[10px] px-1.5 py-1 text-[#C4A484] font-medium uppercase tracking-wider">
-                          +{product.tastingNotes.length - 3} more
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="flex items-baseline justify-between">
-                    {(product.storePrice ?? product.price) ? (
-                      <span className="text-2xl font-serif text-[#F4F1ED]">
-                        ${(product.storePrice ?? product.price as number).toFixed(2)}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-[#F4F1ED]/40 uppercase tracking-wider">Price unavailable</span>
-                    )}
-                  </div>
-
-                  <div className="flex items-center justify-between border-t border-[#F4F1ED]/10 pt-4">
-                    <div className="flex flex-col">
-                      <span className="text-xs font-mono text-[#F4F1ED]/50">
-                        {product.size}
-                        {product.size ? " • " : ""}
-                        {product.category === "Snacks" || product.category === "Soda" || product.category === "Water" || !product.abv
-                          ? ""
-                          : `${product.abv} ABV`}
-                      </span>
-                      <div className="mt-1.5 flex items-center">
-                        <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider bg-amber-950/40 border border-amber-900/40 px-2 py-0.5">
-                          🛵 On-Demand Delivery
-                        </span>
-                      </div>
-                    </div>
-                    <span className={`text-[10px] uppercase tracking-wider px-2.5 py-1 border font-bold ${getStockBadgeColor(product.stockStatus)}`}>
-                      {product.stockStatus}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-[#F4F1ED]/10 flex items-center justify-between text-xs gap-2 flex-wrap">
-                  <div className="flex gap-2">
+      {!searchActive && !isLoading && (
+        <div className="pt-6 space-y-8">
+          {categories.map((category) => {
+            const items = products.filter((p) => p.category === category).slice(0, 16);
+            if (items.length === 0) return null;
+            return (
+              <div key={category}>
+                <div className="px-4 flex items-center justify-between mb-3">
+                  <h2 className="text-lg font-extrabold text-gray-900">{category}</h2>
+                  <div className="flex gap-1">
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleAddToDoorDash(product);
-                      }}
-                      className="px-3 py-2 bg-[#FF3008] hover:bg-[#E52B07] text-white text-[9px] uppercase tracking-wider font-extrabold transition cursor-pointer border border-[#FF3008]/20 flex items-center gap-1 shadow-md"
+                      onClick={() => scrollRow(category, -1)}
+                      className="w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition cursor-pointer"
+                      aria-label={`Scroll ${category} left`}
                     >
-                      <span>🛵</span> DoorDash
+                      <ChevronLeft className="w-4 h-4 text-gray-700" />
                     </button>
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleAddToGrubhub(product);
-                      }}
-                      className="px-3 py-2 bg-[#F63440] hover:bg-[#d92b36] text-white text-[9px] uppercase tracking-wider font-extrabold transition cursor-pointer border border-[#F63440]/20 flex items-center gap-1 shadow-md"
+                      onClick={() => scrollRow(category, 1)}
+                      className="w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition cursor-pointer"
+                      aria-label={`Scroll ${category} right`}
                     >
-                      <span>🍔</span> Grubhub
+                      <ChevronRight className="w-4 h-4 text-gray-700" />
                     </button>
                   </div>
-                  <span className="text-[#F4F1ED]/40 flex items-center group-hover:text-[#F4F1ED] transition-colors uppercase tracking-widest text-[9px] font-bold">
-                    View Specs <ChevronRight className="w-3 h-3 ml-0.5 text-[#C4A484]" />
-                  </span>
+                </div>
+                <div
+                  ref={(el) => { if (el) rowRefs.current.set(category, el); }}
+                  className="flex gap-3 overflow-x-auto snap-x snap-mandatory px-4 pb-2 scrollbar-hide"
+                  style={{ scrollbarWidth: "none" }}
+                >
+                  {items.map((product) => (
+                    <ProductCard key={product.id} product={product} />
+                  ))}
                 </div>
               </div>
-            </motion.div>
-          ))}
+            );
+          })}
         </div>
       )}
+
+      {isLoading && (
+        <div className="flex flex-col items-center justify-center py-28 space-y-4">
+          <div className="w-8 h-8 border-2 border-[#E4002B] border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-gray-400 text-sm">Loading products...</p>
+        </div>
+      )}
+
+      {showScrollTop && (
+        <button
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          className="fixed bottom-20 right-4 z-40 w-12 h-12 rounded-full bg-[#111111] text-white flex items-center justify-center shadow-lg hover:bg-[#2a2a2a] transition cursor-pointer"
+          title="Back to top"
+          aria-label="Scroll back to top"
+        >
+          <ChevronUp className="w-6 h-6" />
+        </button>
+      )}
+
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex items-center justify-around py-2.5 z-40">
+        <button
+          onClick={() => searchInputRef.current?.focus()}
+          className="flex flex-col items-center gap-1 text-gray-500 hover:text-[#E4002B] transition cursor-pointer"
+        >
+          <Search className="w-5 h-5" />
+          <span className="text-[10px] font-semibold">Search</span>
+        </button>
+        <button
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          className="flex flex-col items-center gap-1 text-[#E4002B] transition cursor-pointer"
+        >
+          <Home className="w-5 h-5" />
+          <span className="text-[10px] font-semibold">Home</span>
+        </button>
+        <button
+          className="flex flex-col items-center gap-1 text-gray-500 hover:text-[#E4002B] transition cursor-pointer"
+        >
+          <User className="w-5 h-5" />
+          <span className="text-[10px] font-semibold">Account</span>
+        </button>
+        
+          href={getDoorDashUrl()}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex flex-col items-center gap-1 text-gray-500 hover:text-[#E4002B] transition cursor-pointer"
+        >
+          <ShoppingCart className="w-5 h-5" />
+          <span className="text-[10px] font-semibold">Order</span>
+        </a>
+      </div>
 
       <AnimatePresence>
         {selectedProduct && (
@@ -611,36 +427,34 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                     src={(selectedProduct as any).imageUrl}
                     alt={selectedProduct.name}
                     className="max-h-56 object-contain"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = "none";
-                    }}
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                   />
                 </div>
               ) : (
-              <div className={`bg-gradient-to-br ${selectedProduct.imageColor} text-white p-8 relative`}>
-                <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]"></div>
-                <div className="flex justify-between items-start relative z-10">
-                  <span className="text-[11px] uppercase tracking-[0.12em] bg-black/40 px-3 py-1 border border-white/10 font-bold text-white">
-                    {selectedProduct.category}
-                  </span>
-                  <button
-                    onClick={() => {
-                      setSelectedProduct(null);
-                      setIsInquiring(false);
-                      setInquirySubmitted(false);
-                    }}
-                    className="text-white/85 hover:text-white hover:bg-white/10 p-1.5 rounded-full transition cursor-pointer"
-                  >
-                    ✕
-                  </button>
+                <div className={`bg-gradient-to-br ${selectedProduct.imageColor} text-white p-8 relative`}>
+                  <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]"></div>
+                  <div className="flex justify-between items-start relative z-10">
+                    <span className="text-[11px] uppercase tracking-[0.12em] bg-black/40 px-3 py-1 border border-white/10 font-bold text-white">
+                      {selectedProduct.category}
+                    </span>
+                    <button
+                      onClick={() => {
+                        setSelectedProduct(null);
+                        setIsInquiring(false);
+                        setInquirySubmitted(false);
+                      }}
+                      className="text-white/85 hover:text-white hover:bg-white/10 p-1.5 rounded-full transition cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="mt-8 space-y-2 relative z-10">
+                    <h2 className="text-3xl md:text-4xl font-serif tracking-wide">{selectedProduct.name}</h2>
+                    <p className="text-amber-100/90 font-mono text-xs uppercase tracking-wider">
+                      Origin: {selectedProduct.origin} • {selectedProduct.category === "Snack" ? "Type: Gourmet Snack" : (selectedProduct.category === "Soda" || selectedProduct.abv === "0%" || selectedProduct.abv === "0" || selectedProduct.abv === "0.0%" ? "Type: Non-Alcoholic Soda" : `Strength: ${selectedProduct.abv}`)} • Volume: {selectedProduct.size}
+                    </p>
+                  </div>
                 </div>
-                <div className="mt-8 space-y-2 relative z-10">
-                  <h2 className="text-3xl md:text-4xl font-serif tracking-wide">{selectedProduct.name}</h2>
-                  <p className="text-amber-100/90 font-mono text-xs uppercase tracking-wider">
-                    Origin: {selectedProduct.origin} • {selectedProduct.category === "Snack" ? "Type: Gourmet Snack" : (selectedProduct.category === "Soda" || selectedProduct.abv === "0%" || selectedProduct.abv === "0" || selectedProduct.abv === "0.0%" ? "Type: Non-Alcoholic Soda" : `Strength: ${selectedProduct.abv}`)} • Volume: {selectedProduct.size}
-                  </p>
-                </div>
-              </div>
               )}
 
               {(selectedProduct as any).imageUrl && (
@@ -815,36 +629,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         )}
       </AnimatePresence>
 
-      <div className="fixed bottom-24 right-6 z-40">
-        <a
-          href={getGrubhubUrl()}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="relative bg-[#F63440] hover:bg-[#d92b36] text-white p-4 rounded-full shadow-2xl hover:scale-105 transition active:scale-95 group cursor-pointer flex items-center justify-center border border-white/10"
-          title="Visit Calloway Market on Grubhub"
-        >
-          <ShoppingBag className="w-6 h-6 text-white" />
-          <span className="absolute right-14 bg-[#121110] border border-[#F4F1ED]/10 text-[#C4A484] text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-sm shadow-xl hidden md:block whitespace-nowrap">
-            Open Grubhub Shop
-          </span>
-        </a>
-      </div>
-
-      <div className="fixed bottom-6 right-6 z-40">
-        <a
-          href={getDoorDashUrl()}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="relative bg-[#FF3008] hover:bg-[#E52B07] text-white p-4 rounded-full shadow-2xl hover:scale-105 transition active:scale-95 group cursor-pointer flex items-center justify-center border border-white/10"
-          title="Visit Calloway Market on DoorDash"
-        >
-          <ShoppingBag className="w-6 h-6 text-white" />
-          <span className="absolute right-14 bg-[#121110] border border-[#F4F1ED]/10 text-[#C4A484] text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-sm shadow-xl hidden md:block whitespace-nowrap">
-            Open DoorDash Shop
-          </span>
-        </a>
-      </div>
-
       <AnimatePresence>
         {isRedirectModalOpen && redirectingProduct && (
           <div className="fixed inset-0 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 z-55" style={{ zIndex: 9999 }}>
@@ -870,7 +654,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                 <span className="text-[10px] font-mono text-gray-400 block">{redirectingProduct.category} • {redirectingProduct.size}</span>
               </div>
               <div className="space-y-3 pt-2">
-                <a
+                
                   href={getDoorDashUrl(redirectingProduct)}
                   target="_blank"
                   rel="noopener noreferrer"
