@@ -1023,56 +1023,54 @@ app.post("/api/email-signup/broadcast", requireMerchantAuth, async (req, res) =>
     res.status(500).json({ error: err.message || "Broadcast failed." });
   }
 });
-// Promo banner settings — a single configurable banner (image, headline,
-// subtext, button) shown on the customer site, editable from the merchant
-// dashboard. Stored as one row in a generic key/value settings table so we
-// don't need a new dedicated table for every future setting.
-app.get("/api/settings/promo", async (req, res) => {
-  const defaults = {
-    imageUrl: "",
-    height: 220,
-    headline: "",
-    subtext: "",
-    buttonLabel: "",
-    buttonUrl: "",
-  };
-  if (!supabase) return res.json(defaults);
+
+// Multiple promo banners — an ordered array of banners (each can be a
+// photo or a video), shown one after another on the customer site.
+// Stored as one array under the same site_settings key/value table.
+app.get("/api/settings/promos", async (req, res) => {
+  if (!supabase) return res.json({ promos: [] });
   try {
     const { data, error } = await supabase
       .from("site_settings")
       .select("value")
-      .eq("key", "promo_banner")
+      .eq("key", "promo_banners")
       .maybeSingle();
     if (error) throw error;
-    res.json(data ? { ...defaults, ...data.value } : defaults);
+    res.json({ promos: data?.value?.promos || [] });
   } catch (err) {
-    console.error("Failed to load promo banner settings:", err);
-    res.json(defaults);
+    console.error("Failed to load promo banners:", err);
+    res.json({ promos: [] });
   }
 });
 
-app.patch("/api/settings/promo", requireMerchantAuth, async (req, res) => {
+app.patch("/api/settings/promos", requireMerchantAuth, async (req, res) => {
   if (!supabase) {
     return res.status(503).json({ error: "Database not configured." });
   }
-  const { imageUrl, height, headline, subtext, buttonLabel, buttonUrl } = req.body;
-  const value = {
-    imageUrl: imageUrl || "",
-    height: Number(height) || 220,
-    headline: headline || "",
-    subtext: subtext || "",
-    buttonLabel: buttonLabel || "",
-    buttonUrl: buttonUrl || "",
-  };
+  const { promos } = req.body;
+  if (!Array.isArray(promos)) {
+    return res.status(400).json({ error: "promos must be an array." });
+  }
+  const cleaned = promos.map((p: any, idx: number) => ({
+    id: p.id || `promo_${Date.now()}_${idx}`,
+    mediaType: p.mediaType === "video" ? "video" : "image",
+    mediaUrl: p.mediaUrl || "",
+    imageFit: p.imageFit === "contain" ? "contain" : "cover",
+    height: Number(p.height) || 220,
+    headline: p.headline || "",
+    subtext: p.subtext || "",
+    buttonLabel: p.buttonLabel || "",
+    buttonUrl: p.buttonUrl || "",
+  }));
   try {
     const { error } = await supabase
       .from("site_settings")
-      .upsert({ key: "promo_banner", value }, { onConflict: "key" });
+      .upsert({ key: "promo_banners", value: { promos: cleaned } }, { onConflict: "key" });
     if (error) throw error;
-    res.json({ success: true, value });
+    res.json({ success: true, promos: cleaned });
   } catch (err: any) {
-    console.error("Failed to save promo banner settings:", err);
-    res.status(500).json({ error: err.message || "Failed to save promo settings." });
+    console.error("Failed to save promo banners:", err);
+    res.status(500).json({ error: err.message || "Failed to save promo banners." });
   }
 });
 
