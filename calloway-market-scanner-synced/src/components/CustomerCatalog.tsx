@@ -20,9 +20,13 @@ interface PromoBanner {
   subtext: string;
   buttonLabel: string;
   buttonUrl: string;
-  position: "full" | "left" | "right";
+  position: "full" | "left" | "right" | "sidebar-left" | "sidebar-right";
   headlineSize: "sm" | "md" | "lg";
   subtextSize: "sm" | "md" | "lg";
+  headlineBold: boolean;
+  headlineItalic: boolean;
+  subtextBold: boolean;
+  subtextItalic: boolean;
 }
 
 const HEADLINE_SIZE_CLASSES: Record<string, string> = {
@@ -275,58 +279,67 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     );
   };
 
-  const PromoCard = ({ promo }: { promo: PromoBanner }) => (
-    <div
-      className={`rounded-2xl overflow-hidden relative bg-gray-100 ${
-        promo.position === "full" ? "w-full" : "w-full sm:w-[calc(50%-6px)]"
-      }`}
-      style={{ height: `${promo.height || 220}px` }}
-    >
-      {promo.mediaUrl && promo.mediaType === "video" ? (
-        <video
-          src={promo.mediaUrl}
-          autoPlay
-          muted
-          loop
-          playsInline
-          className={`absolute inset-0 w-full h-full ${promo.imageFit === "contain" ? "object-contain bg-gray-900" : "object-cover"}`}
-        />
-      ) : promo.mediaUrl ? (
-        <img
-          src={promo.mediaUrl}
-          alt={promo.headline || "Promotion"}
-          className={`absolute inset-0 w-full h-full ${promo.imageFit === "contain" ? "object-contain bg-gray-900" : "object-cover"}`}
-          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-        />
-      ) : null}
-      {(promo.headline || promo.subtext || promo.buttonLabel) && (
-        <div className="absolute inset-0 bg-black/25 flex flex-col justify-center px-6">
-          {promo.headline && (
-            <h2 className={`text-white font-extrabold leading-tight max-w-xs drop-shadow-lg ${HEADLINE_SIZE_CLASSES[promo.headlineSize] || HEADLINE_SIZE_CLASSES.md}`}>
-              {promo.headline}
-            </h2>
-          )}
-          {promo.subtext && (
-            <p className={`text-white/90 mt-1 max-w-xs drop-shadow ${SUBTEXT_SIZE_CLASSES[promo.subtextSize] || SUBTEXT_SIZE_CLASSES.md}`}>
-              {promo.subtext}
-            </p>
-          )}
-          {promo.buttonLabel && (
-            <button
-              onClick={() =>
-                promo.buttonUrl
-                  ? window.open(promo.buttonUrl, "_blank")
-                  : setShowGenericOrderSheet(true)
-              }
-              className="mt-3 self-start px-5 py-2 bg-white text-black text-xs font-bold rounded-full hover:bg-gray-100 transition cursor-pointer"
-            >
-              {promo.buttonLabel}
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  const PromoCard = ({ promo }: { promo: PromoBanner }) => {
+    const isSidebar = promo.position === "sidebar-left" || promo.position === "sidebar-right";
+    return (
+      <div
+        className={
+          isSidebar
+            ? `hidden lg:block fixed ${promo.position === "sidebar-left" ? "left-4" : "right-4"} top-24 z-30 w-40 rounded-2xl overflow-hidden relative bg-gray-100 shadow-lg`
+            : `rounded-2xl overflow-hidden relative bg-gray-100 ${promo.position === "full" ? "w-full" : "w-full sm:w-[calc(50%-6px)]"}`
+        }
+        style={{ height: `${promo.height || 220}px` }}
+      >
+        {promo.mediaUrl && promo.mediaType === "video" ? (
+          <video
+            src={promo.mediaUrl}
+            autoPlay
+            muted
+            loop
+            playsInline
+            className={`absolute inset-0 w-full h-full ${promo.imageFit === "contain" ? "object-contain bg-gray-900" : "object-cover"}`}
+          />
+        ) : promo.mediaUrl ? (
+          <img
+            src={promo.mediaUrl}
+            alt={promo.headline || "Promotion"}
+            className={`absolute inset-0 w-full h-full ${promo.imageFit === "contain" ? "object-contain bg-gray-900" : "object-cover"}`}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+          />
+        ) : null}
+        {(promo.headline || promo.subtext || promo.buttonLabel) && (
+          <div className="absolute inset-0 bg-black/25 flex flex-col justify-center px-6">
+            {promo.headline && (
+              <h2
+                className={`text-white leading-tight max-w-xs drop-shadow-lg ${HEADLINE_SIZE_CLASSES[promo.headlineSize] || HEADLINE_SIZE_CLASSES.md} ${promo.headlineBold ? "font-extrabold" : "font-medium"} ${promo.headlineItalic ? "italic" : ""}`}
+              >
+                {promo.headline}
+              </h2>
+            )}
+            {promo.subtext && (
+              <p
+                className={`text-white/90 mt-1 max-w-xs drop-shadow ${SUBTEXT_SIZE_CLASSES[promo.subtextSize] || SUBTEXT_SIZE_CLASSES.md} ${promo.subtextBold ? "font-bold" : "font-normal"} ${promo.subtextItalic ? "italic" : ""}`}
+              >
+                {promo.subtext}
+              </p>
+            )}
+            {promo.buttonLabel && (
+              <button
+                onClick={() =>
+                  promo.buttonUrl
+                    ? window.open(promo.buttonUrl, "_blank")
+                    : setShowGenericOrderSheet(true)
+                }
+                className="mt-3 self-start px-5 py-2 bg-white text-black text-xs font-bold rounded-full hover:bg-gray-100 transition cursor-pointer"
+              >
+                {promo.buttonLabel}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="-mx-4 sm:-mx-6 lg:-mx-8 -my-10 bg-white pb-24" id="customer-view">
