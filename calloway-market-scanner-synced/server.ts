@@ -1064,9 +1064,13 @@ app.patch("/api/settings/promos", requireMerchantAuth, async (req, res) => {
     subtext: p.subtext || "",
     buttonLabel: p.buttonLabel || "",
     buttonUrl: p.buttonUrl || "",
-    position: ["full", "left", "right"].includes(p.position) ? p.position : "full",
+    position: ["full", "left", "right", "sidebar-left", "sidebar-right"].includes(p.position) ? p.position : "full",
     headlineSize: ["sm", "md", "lg"].includes(p.headlineSize) ? p.headlineSize : "md",
     subtextSize: ["sm", "md", "lg"].includes(p.subtextSize) ? p.subtextSize : "md",
+    headlineBold: !!p.headlineBold,
+    headlineItalic: !!p.headlineItalic,
+    subtextBold: !!p.subtextBold,
+    subtextItalic: !!p.subtextItalic,
   }));
   try {
     const { error } = await supabase
@@ -1077,6 +1081,46 @@ app.patch("/api/settings/promos", requireMerchantAuth, async (req, res) => {
   } catch (err: any) {
     console.error("Failed to save promo banners:", err);
     res.status(500).json({ error: err.message || "Failed to save promo banners." });
+  }
+});
+
+// Real file upload — used by the promo banner editor (and reusable
+// anywhere else that needs it) so merchants can upload a photo or video
+// directly from their computer instead of pasting a hosted URL. Saves the
+// file into a Supabase Storage bucket called "media" and returns the
+// permanent public URL. Sent as base64 in a JSON body (rather than
+// multipart/form-data) so no extra upload-parsing library is needed —
+// the existing 50mb JSON body limit already configured on this server
+// comfortably covers typical promo photos; large videos may need to stay
+// under roughly 30-35MB to account for base64 encoding overhead.
+app.post("/api/upload", requireMerchantAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(503).json({ error: "Database/storage not configured." });
+  }
+  const { fileName, fileType, fileBase64 } = req.body;
+  if (!fileName || !fileType || !fileBase64) {
+    return res.status(400).json({ error: "fileName, fileType, and fileBase64 are all required." });
+  }
+
+  try {
+    const buffer = Buffer.from(fileBase64, "base64");
+    const safeName = String(fileName).replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `promos/${Date.now()}-${safeName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("media")
+      .upload(path, buffer, { contentType: fileType, upsert: true });
+    if (uploadError) throw uploadError;
+
+    const { data: publicUrlData } = supabase.storage.from("media").getPublicUrl(path);
+    res.json({ success: true, url: publicUrlData.publicUrl });
+  } catch (err: any) {
+    console.error("File upload failed:", err);
+    res.status(500).json({
+      error:
+        err.message ||
+        "Upload failed. Make sure a public Storage bucket named 'media' exists in your Supabase project.",
+    });
   }
 });
 
