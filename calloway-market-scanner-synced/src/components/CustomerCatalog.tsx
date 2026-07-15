@@ -837,3 +837,4 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     </div>
   );
 }
+
