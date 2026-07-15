@@ -606,6 +606,7 @@ app.patch("/api/products/:id", requireMerchantAuth, async (req, res) => {
     "name", "category", "subcategory", "description", "origin", "abv", "size",
     "stockStatus", "tastingNotes", "foodPairing", "imageColor", "iconName",
     "popularity", "price", "storePrice", "marginPercent", "featured", "upc",
+    "imageUrl",
   ];
 
   for (const field of allowedFields) {
@@ -1025,8 +1026,10 @@ app.post("/api/email-signup/broadcast", requireMerchantAuth, async (req, res) =>
 });
 
 // Multiple promo banners — an ordered array of banners (each can be a
-// photo or a video), shown one after another on the customer site.
-// Stored as one array under the same site_settings key/value table.
+// photo or a video), shown on the customer site. Each banner supports a
+// position ("full" width, or "left"/"right" half-width so two can sit
+// side by side) and independent headline/subtext text sizes. Stored as
+// one array under the site_settings key/value table.
 app.get("/api/settings/promos", async (req, res) => {
   if (!supabase) return res.json({ promos: [] });
   try {
@@ -1061,6 +1064,9 @@ app.patch("/api/settings/promos", requireMerchantAuth, async (req, res) => {
     subtext: p.subtext || "",
     buttonLabel: p.buttonLabel || "",
     buttonUrl: p.buttonUrl || "",
+    position: ["full", "left", "right"].includes(p.position) ? p.position : "full",
+    headlineSize: ["sm", "md", "lg"].includes(p.headlineSize) ? p.headlineSize : "md",
+    subtextSize: ["sm", "md", "lg"].includes(p.subtextSize) ? p.subtextSize : "md",
   }));
   try {
     const { error } = await supabase
