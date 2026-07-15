@@ -20,7 +20,22 @@ interface PromoBanner {
   subtext: string;
   buttonLabel: string;
   buttonUrl: string;
+  position: "full" | "left" | "right";
+  headlineSize: "sm" | "md" | "lg";
+  subtextSize: "sm" | "md" | "lg";
 }
+
+const HEADLINE_SIZE_CLASSES: Record<string, string> = {
+  sm: "text-lg",
+  md: "text-2xl",
+  lg: "text-4xl",
+};
+
+const SUBTEXT_SIZE_CLASSES: Record<string, string> = {
+  sm: "text-xs",
+  md: "text-sm",
+  lg: "text-lg",
+};
 
 export default function CustomerCatalog({ products, isLoading, onSearchLog }: CustomerCatalogProps) {
   const triggerSearchFetch = () => {};
@@ -260,18 +275,71 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     );
   };
 
+  const PromoCard = ({ promo }: { promo: PromoBanner }) => (
+    <div
+      className={`rounded-2xl overflow-hidden relative bg-gray-100 ${
+        promo.position === "full" ? "w-full" : "w-full sm:w-[calc(50%-6px)]"
+      }`}
+      style={{ height: `${promo.height || 220}px` }}
+    >
+      {promo.mediaUrl && promo.mediaType === "video" ? (
+        <video
+          src={promo.mediaUrl}
+          autoPlay
+          muted
+          loop
+          playsInline
+          className={`absolute inset-0 w-full h-full ${promo.imageFit === "contain" ? "object-contain bg-gray-900" : "object-cover"}`}
+        />
+      ) : promo.mediaUrl ? (
+        <img
+          src={promo.mediaUrl}
+          alt={promo.headline || "Promotion"}
+          className={`absolute inset-0 w-full h-full ${promo.imageFit === "contain" ? "object-contain bg-gray-900" : "object-cover"}`}
+          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+        />
+      ) : null}
+      {(promo.headline || promo.subtext || promo.buttonLabel) && (
+        <div className="absolute inset-0 bg-black/25 flex flex-col justify-center px-6">
+          {promo.headline && (
+            <h2 className={`text-white font-extrabold leading-tight max-w-xs drop-shadow-lg ${HEADLINE_SIZE_CLASSES[promo.headlineSize] || HEADLINE_SIZE_CLASSES.md}`}>
+              {promo.headline}
+            </h2>
+          )}
+          {promo.subtext && (
+            <p className={`text-white/90 mt-1 max-w-xs drop-shadow ${SUBTEXT_SIZE_CLASSES[promo.subtextSize] || SUBTEXT_SIZE_CLASSES.md}`}>
+              {promo.subtext}
+            </p>
+          )}
+          {promo.buttonLabel && (
+            <button
+              onClick={() =>
+                promo.buttonUrl
+                  ? window.open(promo.buttonUrl, "_blank")
+                  : setShowGenericOrderSheet(true)
+              }
+              className="mt-3 self-start px-5 py-2 bg-white text-black text-xs font-bold rounded-full hover:bg-gray-100 transition cursor-pointer"
+            >
+              {promo.buttonLabel}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="-mx-4 sm:-mx-6 lg:-mx-8 -my-10 bg-white pb-24" id="customer-view">
-      <div className="bg-[#111111] text-white px-4 py-3 flex items-center justify-between">
-        <button className="p-1.5" aria-label="Menu">
+      <div className="bg-white text-gray-900 px-4 py-3 flex items-center justify-between border-b border-gray-100">
+        <button className="p-1.5 text-gray-700" aria-label="Menu">
           <Menu className="w-6 h-6" />
         </button>
         <img src={callowayLogo} alt="Calloway Market" className="h-9 w-auto" />
         <div className="flex items-center gap-1 text-xs font-semibold">
           <ShoppingBag className="w-4 h-4 text-[#E4002B]" />
           <div className="text-right leading-tight">
-            <div className="text-gray-300 text-[10px] font-normal">Delivery</div>
-            <div className="underline">Bakersfield</div>
+            <div className="text-gray-400 text-[10px] font-normal">Delivery</div>
+            <div className="underline text-gray-700">Bakersfield</div>
           </div>
         </div>
       </div>
@@ -290,56 +358,13 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </form>
       </div>
 
-      {promos.map((promo) => (
-        <div key={promo.id} className="px-4 pt-4">
-          <div
-            className="rounded-2xl overflow-hidden relative bg-gray-100"
-            style={{ height: `${promo.height || 220}px` }}
-          >
-            {promo.mediaUrl && promo.mediaType === "video" ? (
-              <video
-                src={promo.mediaUrl}
-                autoPlay
-                muted
-                loop
-                playsInline
-                className={`absolute inset-0 w-full h-full ${promo.imageFit === "contain" ? "object-contain bg-gray-900" : "object-cover"}`}
-              />
-            ) : promo.mediaUrl ? (
-              <img
-                src={promo.mediaUrl}
-                alt={promo.headline || "Promotion"}
-                className={`absolute inset-0 w-full h-full ${promo.imageFit === "contain" ? "object-contain bg-gray-900" : "object-cover"}`}
-                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-              />
-            ) : null}
-            {(promo.headline || promo.subtext || promo.buttonLabel) && (
-              <div className="absolute inset-0 bg-black/25 flex flex-col justify-center px-6">
-                {promo.headline && (
-                  <h2 className="text-white text-2xl font-extrabold leading-tight max-w-xs drop-shadow-lg">
-                    {promo.headline}
-                  </h2>
-                )}
-                {promo.subtext && (
-                  <p className="text-white/90 text-sm mt-1 max-w-xs drop-shadow">{promo.subtext}</p>
-                )}
-                {promo.buttonLabel && (
-                  <button
-                    onClick={() =>
-                      promo.buttonUrl
-                        ? window.open(promo.buttonUrl, "_blank")
-                        : setShowGenericOrderSheet(true)
-                    }
-                    className="mt-3 self-start px-5 py-2 bg-white text-black text-xs font-bold rounded-full hover:bg-gray-100 transition cursor-pointer"
-                  >
-                    {promo.buttonLabel}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+      {promos.length > 0 && (
+        <div className="px-4 pt-4 flex flex-wrap gap-3">
+          {promos.map((promo) => (
+            <PromoCard key={promo.id} promo={promo} />
+          ))}
         </div>
-      ))}
+      )}
 
       <div className="px-4 pt-4">
         <div className="rounded-2xl bg-gradient-to-br from-[#1a1a1a] to-[#3a3a3a] text-white p-6">
