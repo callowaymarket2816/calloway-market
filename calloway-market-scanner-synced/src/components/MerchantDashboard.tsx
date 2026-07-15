@@ -7,7 +7,7 @@ import {
   TrendingUp, RefreshCw, Sparkles, MapPin, Search, AlertTriangle, 
   Layers, Package, Compass, Brain, CheckCircle, Upload, Plus, Clipboard, Check, Globe, Download,
   Link2, FileText, X, AlertCircle, Database, Info, Percent, DollarSign, Clock, Trash2,
-  PackageCheck, PackageX, Star, Pencil, Save, Video, Image as ImageIcon
+  PackageCheck, PackageX, Star, Pencil, Save, Video, Image as ImageIcon, ArrowUp, ArrowDown
 } from "lucide-react";
 import { AnalyticsSummary, AiInsightsResponse, Product } from "../types";
 import { motion } from "motion/react";
@@ -30,6 +30,9 @@ interface PromoBanner {
   subtext: string;
   buttonLabel: string;
   buttonUrl: string;
+  position: "full" | "left" | "right";
+  headlineSize: "sm" | "md" | "lg";
+  subtextSize: "sm" | "md" | "lg";
 }
 
 export default function MerchantDashboard({ products, onRefreshAllData, onRunAiInsights, searchCount, merchantKey }: MerchantDashboardProps) {
@@ -127,6 +130,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       description: product.description || "",
       foodPairing: product.foodPairing || "",
       tastingNotes: product.tastingNotes ? product.tastingNotes.join(", ") : "",
+      imageUrl: (product as any).imageUrl || "",
     });
   };
 
@@ -145,6 +149,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         description: editForm.description,
         foodPairing: editForm.foodPairing,
         tastingNotes: editForm.tastingNotes,
+        imageUrl: editForm.imageUrl,
       };
       if (editForm.price !== "") payload.price = editForm.price;
       if (editForm.storePrice !== "") payload.storePrice = editForm.storePrice;
@@ -170,8 +175,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
-  // Promo banners — an editable list of photo/video banners shown on the
-  // customer-facing site, loaded from and saved to /api/settings/promos.
+  // Promo banners — an editable, reorderable list of photo/video banners
+  // shown on the customer-facing site, loaded from and saved to
+  // /api/settings/promos.
   const [promos, setPromos] = useState<PromoBanner[]>([]);
   const [isLoadingPromos, setIsLoadingPromos] = useState(true);
   const [isSavingPromos, setIsSavingPromos] = useState(false);
@@ -198,6 +204,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         subtext: "",
         buttonLabel: "",
         buttonUrl: "",
+        position: "full",
+        headlineSize: "md",
+        subtextSize: "md",
       },
     ]);
   };
@@ -208,6 +217,19 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
   const removePromo = (id: string) => {
     setPromos((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  const movePromo = (id: string, direction: -1 | 1) => {
+    setPromos((prev) => {
+      const idx = prev.findIndex((p) => p.id === id);
+      const targetIdx = idx + direction;
+      if (idx === -1 || targetIdx < 0 || targetIdx >= prev.length) return prev;
+      const updated = [...prev];
+      const temp = updated[idx];
+      updated[idx] = updated[targetIdx];
+      updated[targetIdx] = temp;
+      return updated;
+    });
   };
 
   const handleSavePromos = async (e: React.FormEvent) => {
@@ -342,6 +364,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // Inventory Filtering States
   const [manageSearchQuery, setManageSearchQuery] = useState("");
   const [manageCategoryFilter, setManageCategoryFilter] = useState("All");
+  const [manageSizeFilter, setManageSizeFilter] = useState("All");
 
   // Smart Parser for CSV and Google Sheets
   const parseCSV = (text: string) => {
@@ -1112,12 +1135,20 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const activeCategoriesTotal = activeCategories.reduce((acc, cat) => acc + cat.value, 0);
   const activeBrandsTotal = activeBrands.reduce((acc, brand) => acc + brand.value, 0);
 
+  // Every distinct size value currently in inventory, sorted, for the size
+  // filter dropdown. Blank/undefined sizes are excluded from the list itself
+  // but still shown when "All" is selected.
+  const uniqueSizes = Array.from(
+    new Set((products || []).map((p) => p.size).filter((s): s is string => !!s && s.trim().length > 0))
+  ).sort();
+
   const filteredActiveProducts = (products || []).filter((p) => {
     const matchesSearch = p.name.toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
                           p.origin.toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
                           (p.description || "").toLowerCase().includes(manageSearchQuery.toLowerCase());
     const matchesCategory = manageCategoryFilter === "All" || p.category === manageCategoryFilter;
-    return matchesSearch && matchesCategory;
+    const matchesSize = manageSizeFilter === "All" || p.size === manageSizeFilter;
+    return matchesSearch && matchesCategory && matchesSize;
   });
 
   return (
@@ -2069,7 +2100,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         )}
       </div>
 
-      {/* Promo Banner Manager — supports multiple photo or video banners */}
+      {/* Promo Banner Manager — supports multiple photo or video banners,
+          each with its own text size and position (full/left/right). */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="promo-banner-manager">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
@@ -2081,8 +2113,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               Photo & Video Promo Banners
             </h2>
             <p className="text-xs text-gray-500 font-light mt-1">
-              These appear stacked under the search bar on your customer-facing site, in the order shown below.
-              Each one can be a photo or a video — paste a hosted link for either (no direct upload yet).
+              These appear under the search bar on your customer-facing site, in the order shown below. Use the
+              up/down arrows to reorder, and set "Left Half" / "Right Half" on two consecutive promos to place
+              them side by side instead of full width.
             </p>
           </div>
           <button
@@ -2122,14 +2155,34 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   <div key={promo.id} className="border border-gray-200 rounded-2xl p-5 space-y-4 bg-slate-50/40">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Promo #{idx + 1}</span>
-                      <button
-                        type="button"
-                        onClick={() => removePromo(promo.id)}
-                        className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                        title="Remove this promo"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => movePromo(promo.id, -1)}
+                          disabled={idx === 0}
+                          className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Move up"
+                        >
+                          <ArrowUp className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => movePromo(promo.id, 1)}
+                          disabled={idx === promos.length - 1}
+                          className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Move down"
+                        >
+                          <ArrowDown className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removePromo(promo.id)}
+                          className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                          title="Remove this promo"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2162,6 +2215,33 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                             onChange={(e) => updatePromo(promo.id, "mediaUrl", e.target.value)}
                             className="w-full px-3.5 py-2.5 bg-white border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
                           />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Position on Page</label>
+                          <div className="grid grid-cols-3 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => updatePromo(promo.id, "position", "full")}
+                              className={`py-2 rounded-lg text-[11px] font-bold uppercase transition ${promo.position === "full" ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-600"}`}
+                            >
+                              Full Width
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updatePromo(promo.id, "position", "left")}
+                              className={`py-2 rounded-lg text-[11px] font-bold uppercase transition ${promo.position === "left" ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-600"}`}
+                            >
+                              Left Half
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updatePromo(promo.id, "position", "right")}
+                              className={`py-2 rounded-lg text-[11px] font-bold uppercase transition ${promo.position === "right" ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-600"}`}
+                            >
+                              Right Half
+                            </button>
+                          </div>
                         </div>
 
                         <div className="flex gap-2">
@@ -2198,7 +2278,21 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                         </div>
 
                         <div>
-                          <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Headline</label>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">Headline</label>
+                            <div className="flex gap-1">
+                              {(["sm", "md", "lg"] as const).map((size) => (
+                                <button
+                                  key={size}
+                                  type="button"
+                                  onClick={() => updatePromo(promo.id, "headlineSize", size)}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase transition ${promo.headlineSize === size ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-500"}`}
+                                >
+                                  {size}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                           <input
                             type="text"
                             placeholder="e.g. Buy 2, Save More"
@@ -2209,7 +2303,21 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                         </div>
 
                         <div>
-                          <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Subtext</label>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">Subtext</label>
+                            <div className="flex gap-1">
+                              {(["sm", "md", "lg"] as const).map((size) => (
+                                <button
+                                  key={size}
+                                  type="button"
+                                  onClick={() => updatePromo(promo.id, "subtextSize", size)}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase transition ${promo.subtextSize === size ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-500"}`}
+                                >
+                                  {size}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                           <input
                             type="text"
                             placeholder="e.g. Mix any 6 bottles of wine and save 10%"
@@ -2269,12 +2377,18 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                           {(promo.headline || promo.subtext || promo.buttonLabel) && (
                             <div className="absolute inset-0 bg-black/25 flex flex-col justify-center px-6">
                               {promo.headline && (
-                                <h2 className="text-white text-2xl font-extrabold leading-tight max-w-xs drop-shadow-lg">
+                                <h2 className={`text-white font-extrabold leading-tight max-w-xs drop-shadow-lg ${
+                                  promo.headlineSize === "sm" ? "text-lg" : promo.headlineSize === "lg" ? "text-4xl" : "text-2xl"
+                                }`}>
                                   {promo.headline}
                                 </h2>
                               )}
                               {promo.subtext && (
-                                <p className="text-white/90 text-sm mt-1 max-w-xs drop-shadow">{promo.subtext}</p>
+                                <p className={`text-white/90 mt-1 max-w-xs drop-shadow ${
+                                  promo.subtextSize === "sm" ? "text-xs" : promo.subtextSize === "lg" ? "text-lg" : "text-sm"
+                                }`}>
+                                  {promo.subtext}
+                                </p>
                               )}
                               {promo.buttonLabel && (
                                 <span className="mt-3 self-start px-5 py-2 bg-white text-black text-xs font-bold rounded-full">
@@ -2289,6 +2403,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                             </div>
                           )}
                         </div>
+                        <p className="text-[10px] text-gray-400">
+                          {promo.position === "full" ? "Displays full width on the site." : `Displays as ${promo.position === "left" ? "left" : "right"} half — pair with another half-width promo to sit side by side.`}
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -2348,6 +2465,20 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               onChange={(e) => setManageSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
             />
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs text-gray-400 uppercase font-bold tracking-wider">Size:</span>
+            <select
+              value={manageSizeFilter}
+              onChange={(e) => setManageSizeFilter(e.target.value)}
+              className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition cursor-pointer"
+            >
+              <option value="All">All Sizes</option>
+              {uniqueSizes.map((size) => (
+                <option key={size} value={size}>{size}</option>
+              ))}
+            </select>
           </div>
           
           <div className="flex items-center gap-2 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-none">
@@ -2688,6 +2819,32 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   onChange={(e) => setEditForm({ ...editForm, tastingNotes: e.target.value })}
                   className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
                 />
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Product Image URL</label>
+                <div className="flex gap-3 items-start">
+                  <input
+                    type="url"
+                    placeholder="https://i.imgur.com/yourimage.jpg"
+                    value={editForm.imageUrl || ""}
+                    onChange={(e) => setEditForm({ ...editForm, imageUrl: e.target.value })}
+                    className="flex-1 px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+                  />
+                  <div className="w-16 h-16 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center overflow-hidden shrink-0">
+                    {editForm.imageUrl ? (
+                      <img
+                        src={editForm.imageUrl}
+                        alt="Preview"
+                        className="w-full h-full object-contain"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      />
+                    ) : (
+                      <ImageIcon className="w-5 h-5 text-gray-300" />
+                    )}
+                  </div>
+                </div>
+                <p className="text-[10px] text-gray-400 mt-1">No file upload yet — paste a hosted image link (Imgur, Google Drive public link, etc.) instead. Products with a UPC also get real photos automatically from the daily lookup cron.</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
