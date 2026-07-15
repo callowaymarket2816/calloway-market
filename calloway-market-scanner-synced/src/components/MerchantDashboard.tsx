@@ -30,9 +30,13 @@ interface PromoBanner {
   subtext: string;
   buttonLabel: string;
   buttonUrl: string;
-  position: "full" | "left" | "right";
+  position: "full" | "left" | "right" | "sidebar-left" | "sidebar-right";
   headlineSize: "sm" | "md" | "lg";
   subtextSize: "sm" | "md" | "lg";
+  headlineBold: boolean;
+  headlineItalic: boolean;
+  subtextBold: boolean;
+  subtextItalic: boolean;
 }
 
 export default function MerchantDashboard({ products, onRefreshAllData, onRunAiInsights, searchCount, merchantKey }: MerchantDashboardProps) {
@@ -182,6 +186,45 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [isLoadingPromos, setIsLoadingPromos] = useState(true);
   const [isSavingPromos, setIsSavingPromos] = useState(false);
   const [promoMessage, setPromoMessage] = useState<string | null>(null);
+  const [uploadingMediaId, setUploadingMediaId] = useState<string | null>(null);
+
+  const handleMediaFileUpload = async (promoId: string, file: File) => {
+    setUploadingMediaId(promoId);
+    setPromoMessage(null);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          // Strip the "data:<mime>;base64," prefix — the server only needs
+          // the raw base64 payload plus the file's type/name separately.
+          const commaIdx = result.indexOf(",");
+          resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+        };
+        reader.onerror = () => reject(new Error("Could not read the selected file."));
+        reader.readAsDataURL(file);
+      });
+
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ fileName: file.name, fileType: file.type, fileBase64: base64 }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        updatePromo(promoId, "mediaUrl", data.url);
+        setPromoMessage("File uploaded! Remember to click Save All Promo Banners to publish it.");
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setPromoMessage(errData.error || "Upload failed.");
+      }
+    } catch (err: any) {
+      setPromoMessage(`Upload error: ${err.message || err}`);
+    } finally {
+      setUploadingMediaId(null);
+    }
+  };
 
   useEffect(() => {
     fetch("/api/settings/promos")
@@ -207,6 +250,10 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         position: "full",
         headlineSize: "md",
         subtextSize: "md",
+        headlineBold: true,
+        headlineItalic: false,
+        subtextBold: false,
+        subtextItalic: false,
       },
     ]);
   };
@@ -2215,6 +2262,30 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                             onChange={(e) => updatePromo(promo.id, "mediaUrl", e.target.value)}
                             className="w-full px-3.5 py-2.5 bg-white border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
                           />
+                          <div className="flex items-center gap-2 mt-2">
+                            <div className="flex-1 h-px bg-gray-200"></div>
+                            <span className="text-[9px] text-gray-400 uppercase font-bold">or</span>
+                            <div className="flex-1 h-px bg-gray-200"></div>
+                          </div>
+                          <label className={`mt-2 w-full py-2.5 border-2 border-dashed rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer ${
+                            uploadingMediaId === promo.id
+                              ? "border-amber-300 bg-amber-50 text-amber-700"
+                              : "border-gray-200 hover:border-amber-900 text-gray-600 hover:text-amber-900"
+                          }`}>
+                            <input
+                              type="file"
+                              accept={promo.mediaType === "video" ? "video/*" : "image/*"}
+                              className="hidden"
+                              disabled={uploadingMediaId === promo.id}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) handleMediaFileUpload(promo.id, file);
+                                e.target.value = "";
+                              }}
+                            />
+                            <Upload className="w-3.5 h-3.5" />
+                            {uploadingMediaId === promo.id ? "Uploading..." : "Upload from Computer"}
+                          </label>
                         </div>
 
                         <div>
@@ -2241,7 +2312,27 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                             >
                               Right Half
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => updatePromo(promo.id, "position", "sidebar-left")}
+                              className={`py-2 rounded-lg text-[11px] font-bold uppercase transition col-span-1 ${promo.position === "sidebar-left" ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-600"}`}
+                            >
+                              Side (Left)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updatePromo(promo.id, "position", "sidebar-right")}
+                              className={`py-2 rounded-lg text-[11px] font-bold uppercase transition col-span-2 ${promo.position === "sidebar-right" ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-600"}`}
+                            >
+                              Side (Right)
+                            </button>
                           </div>
+                          {(promo.position === "sidebar-left" || promo.position === "sidebar-right") && (
+                            <p className="text-[10px] text-amber-700 mt-1.5">
+                              Side banners pin to the edge of the screen and stay visible while scrolling. They only show on
+                              larger screens (tablet/desktop) — there's no room for them on phones.
+                            </p>
+                          )}
                         </div>
 
                         <div className="flex gap-2">
@@ -2280,7 +2371,24 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                         <div>
                           <div className="flex items-center justify-between mb-1.5">
                             <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">Headline</label>
-                            <div className="flex gap-1">
+                            <div className="flex gap-1 items-center">
+                              <button
+                                type="button"
+                                onClick={() => updatePromo(promo.id, "headlineBold", !promo.headlineBold)}
+                                className={`w-6 h-6 rounded text-[11px] font-extrabold transition flex items-center justify-center ${promo.headlineBold ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-500"}`}
+                                title="Bold"
+                              >
+                                B
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updatePromo(promo.id, "headlineItalic", !promo.headlineItalic)}
+                                className={`w-6 h-6 rounded text-[11px] italic font-semibold transition flex items-center justify-center ${promo.headlineItalic ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-500"}`}
+                                title="Italic"
+                              >
+                                I
+                              </button>
+                              <span className="w-px h-4 bg-gray-200 mx-0.5"></span>
                               {(["sm", "md", "lg"] as const).map((size) => (
                                 <button
                                   key={size}
@@ -2305,7 +2413,24 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                         <div>
                           <div className="flex items-center justify-between mb-1.5">
                             <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">Subtext</label>
-                            <div className="flex gap-1">
+                            <div className="flex gap-1 items-center">
+                              <button
+                                type="button"
+                                onClick={() => updatePromo(promo.id, "subtextBold", !promo.subtextBold)}
+                                className={`w-6 h-6 rounded text-[11px] font-extrabold transition flex items-center justify-center ${promo.subtextBold ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-500"}`}
+                                title="Bold"
+                              >
+                                B
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updatePromo(promo.id, "subtextItalic", !promo.subtextItalic)}
+                                className={`w-6 h-6 rounded text-[11px] italic font-semibold transition flex items-center justify-center ${promo.subtextItalic ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-500"}`}
+                                title="Italic"
+                              >
+                                I
+                              </button>
+                              <span className="w-px h-4 bg-gray-200 mx-0.5"></span>
                               {(["sm", "md", "lg"] as const).map((size) => (
                                 <button
                                   key={size}
@@ -2377,16 +2502,16 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                           {(promo.headline || promo.subtext || promo.buttonLabel) && (
                             <div className="absolute inset-0 bg-black/25 flex flex-col justify-center px-6">
                               {promo.headline && (
-                                <h2 className={`text-white font-extrabold leading-tight max-w-xs drop-shadow-lg ${
+                                <h2 className={`text-white leading-tight max-w-xs drop-shadow-lg ${
                                   promo.headlineSize === "sm" ? "text-lg" : promo.headlineSize === "lg" ? "text-4xl" : "text-2xl"
-                                }`}>
+                                } ${promo.headlineBold ? "font-extrabold" : "font-medium"} ${promo.headlineItalic ? "italic" : ""}`}>
                                   {promo.headline}
                                 </h2>
                               )}
                               {promo.subtext && (
                                 <p className={`text-white/90 mt-1 max-w-xs drop-shadow ${
                                   promo.subtextSize === "sm" ? "text-xs" : promo.subtextSize === "lg" ? "text-lg" : "text-sm"
-                                }`}>
+                                } ${promo.subtextBold ? "font-bold" : "font-normal"} ${promo.subtextItalic ? "italic" : ""}`}>
                                   {promo.subtext}
                                 </p>
                               )}
@@ -2404,7 +2529,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                           )}
                         </div>
                         <p className="text-[10px] text-gray-400">
-                          {promo.position === "full" ? "Displays full width on the site." : `Displays as ${promo.position === "left" ? "left" : "right"} half — pair with another half-width promo to sit side by side.`}
+                          {promo.position === "full"
+                            ? "Displays full width on the site."
+                            : promo.position === "left" || promo.position === "right"
+                              ? `Displays as ${promo.position} half — pair with another half-width promo to sit side by side.`
+                              : `Pins to the ${promo.position === "sidebar-left" ? "left" : "right"} edge of the screen, visible while scrolling (desktop/tablet only).`}
                         </p>
                       </div>
                     </div>
