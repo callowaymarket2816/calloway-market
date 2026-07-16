@@ -209,9 +209,18 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
+  // Strips leading zeros before comparing UPCs. This matters because many
+  // barcode scanners output a 12-digit UPC-A code as a 13-digit EAN-13 by
+  // adding a leading zero (UPC-A is technically a subset of EAN-13) — so a
+  // scanned "0888109050047" needs to still match a stored "888109050047".
+  const normalizeUpc = (code: string) => String(code).replace(/^0+/, "");
+
   const handleBarcodeDetected = (upc: string) => {
     setIsScannerOpen(false);
-    const match = products.find((p: any) => p.upc && String(p.upc) === upc);
+    const normalizedScanned = normalizeUpc(upc);
+    const match = products.find(
+      (p: any) => p.upc && normalizeUpc(p.upc) === normalizedScanned
+    );
     if (match) {
       setUploadMessage(`Found existing product for UPC ${upc}: "${match.name}". Opening its edit form.`);
       openEditModal(match);
@@ -455,11 +464,42 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [manageSizeFilter, setManageSizeFilter] = useState("All");
 
   // Smart Parser for CSV and Google Sheets
+  // Brand-name lookups used as a fallback when a product's category is a
+  // generic bucket ("Liquor") and its raw category text has no specific
+  // spirit-type keyword left to detect — which is exactly the situation
+  // for products whose original spreadsheet only ever had one "Liquor"
+  // sheet with no further breakdown. In that case, the only remaining
+  // signal for what kind of spirit something actually is lives in its
+  // product NAME (both generic words like "whiskey", and specific brand
+  // names like "Jack Daniels" or "Patron").
+  const WHISKEY_BRANDS = ["jack daniel", "jim beam", "crown royal", "jameson", "maker's mark", "makers mark", "buffalo trace", "wild turkey", "evan williams", "seagram's 7", "seagrams 7", "fireball", "canadian club", "dewar's", "dewars", "johnnie walker", "chivas", "glenlivet", "glenfiddich", "knob creek", "woodford", "bulleit", "ezra brooks", "old forester", "four roses", "jack daniel's", "1792", "elijah craig", "basil hayden", "crown apple"];
+  const TEQUILA_BRANDS = ["patron", "don julio", "jose cuervo", "hornitos", "espolon", "casamigos", "herradura", "milagro", "cazadores", "sauza", "olmeca", "1800", "clase azul", "avion"];
+  const VODKA_BRANDS = ["smirnoff", "tito's", "titos", "grey goose", "absolut", "svedka", "ketel one", "stolichnaya", "stoli", "skyy", "pinnacle", "new amsterdam", "deep eddy", "belvedere", "ciroc"];
+  const GIN_BRANDS = ["tanqueray", "bombay", "beefeater", "hendrick's", "hendricks", "gordon's", "gordons", "seagram's gin", "seagrams gin"];
+  const RUM_BRANDS = ["bacardi", "captain morgan", "malibu", "myers", "mount gay", "kraken", "sailor jerry", "cruzan"];
+  const BRANDY_BRANDS = ["hennessy", "courvoisier", "remy martin", "martell", "e&j", "e & j", "christian brothers", "paul masson"];
+  const LIQUEUR_BRANDS = ["baileys", "bailey's", "kahlua", "grand marnier", "cointreau", "disaronno", "jagermeister", "jägermeister", "southern comfort", "amaretto", "triple sec", "chambord", "frangelico", "midori"];
+
+  const guessSpiritTypeFromName = (name: string): string | null => {
+    const n = (name || "").toLowerCase();
+    if (n.includes("whiskey") || n.includes("whisky") || n.includes("bourbon") || n.includes("scotch") || n.includes("rye") || WHISKEY_BRANDS.some((b) => n.includes(b))) return "Whiskey";
+    if (n.includes("tequila") || n.includes("mezcal") || TEQUILA_BRANDS.some((b) => n.includes(b))) return "Tequila";
+    if (n.includes("vodka") || VODKA_BRANDS.some((b) => n.includes(b))) return "Vodka";
+    if (n.includes(" gin ") || n.startsWith("gin ") || n.endsWith(" gin") || GIN_BRANDS.some((b) => n.includes(b))) return "Gin";
+    if (n.includes("rum") || RUM_BRANDS.some((b) => n.includes(b))) return "Rum";
+    if (n.includes("brandy") || n.includes("cognac") || BRANDY_BRANDS.some((b) => n.includes(b))) return "Brandy";
+    if (n.includes("liqueur") || n.includes("schnapps") || LIQUEUR_BRANDS.some((b) => n.includes(b))) return "Liqueur";
+    return null;
+  };
+
   // Maps a raw/messy category string (from a spreadsheet, or an existing
   // product's current category) to the correct real department name.
   // Shared by both the CSV import parser and the "Fix Existing Categories"
-  // one-time cleanup button, so both use the exact same logic.
-  const normalizeCategory = (rawCategory: string): string => {
+  // one-time cleanup button, so both use the exact same logic. Accepts the
+  // product name too, since a generic category like "Liquor" often has no
+  // specific spirit-type info left in the category text itself — the name
+  // is the only remaining place that information can come from.
+  const normalizeCategory = (rawCategory: string, productName: string = ""): string => {
     let cat = rawCategory || "";
     const catLower = cat.toLowerCase();
     if (catLower.includes("whiskey") || catLower.includes("bourbon") || catLower.includes("scotch") || catLower.includes("rye")) {
@@ -477,7 +517,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     } else if (catLower.includes("liqueur")) {
       cat = "Liqueur";
     } else if (catLower === "liquor" || catLower.includes("spirit")) {
-      cat = "Liquor";
+      // Generic bucket with no specific type in the category text itself —
+      // try to work out the real spirit type from the product name instead.
+      cat = guessSpiritTypeFromName(productName) || "Liquor";
     } else if (catLower.includes("wine") || catLower.includes("cabernet") || catLower.includes("chardonnay") || catLower.includes("merlot") || catLower.includes("champagne") || catLower.includes("prosecco") || catLower.includes("sparkling")) {
       cat = "Wine";
     } else if (catLower.includes("beer") || catLower.includes("ipa") || catLower.includes("lager") || catLower.includes("cider")) {
