@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { Search, MapPin, Inbox, CheckCircle2, ChevronRight, ChevronLeft, ChevronUp, FileText, Info, ShoppingBag, ShoppingCart, Menu, Home, Store, X, Wine, Martini, Beer, Zap, Cookie, CupSoda, Package, Droplet, Coffee } from "lucide-react";
 import { Product } from "../types";
 import { motion, AnimatePresence } from "motion/react";
@@ -281,11 +282,12 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
 
   const PromoCard = ({ promo }: { promo: PromoBanner }) => {
     const isSidebar = promo.position === "sidebar-left" || promo.position === "sidebar-right";
-    return (
+
+    const content = (
       <div
         className={
           isSidebar
-            ? `hidden lg:block fixed ${promo.position === "sidebar-left" ? "left-4" : "right-4"} top-24 z-30 w-40 rounded-2xl overflow-hidden relative bg-gray-100 shadow-lg`
+            ? `hidden lg:block fixed ${promo.position === "sidebar-left" ? "left-4" : "right-4"} top-24 z-[999] w-40 rounded-2xl overflow-hidden bg-gray-100 shadow-xl`
             : `rounded-2xl overflow-hidden relative bg-gray-100 ${promo.position === "full" ? "w-full" : "w-full sm:w-[calc(50%-6px)]"}`
         }
         style={{ height: `${promo.height || 220}px` }}
@@ -339,6 +341,18 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         )}
       </div>
     );
+
+    // Sidebar banners are rendered via a portal straight into document.body.
+    // This is deliberate: "position: fixed" only measures against the real
+    // browser viewport if none of its ancestor elements have a CSS
+    // transform/animation applied — and this app's page-transition
+    // animations apply exactly that kind of transform higher up the tree.
+    // Without the portal, "fixed" sidebar banners get trapped inside that
+    // animated wrapper instead of reaching the true edge of the screen.
+    if (isSidebar) {
+      return createPortal(content, document.body);
+    }
+    return content;
   };
 
   return (
