@@ -22,7 +22,8 @@ interface PromoBanner {
   subtext: string;
   buttonLabel: string;
   buttonUrl: string;
-  position: "full" | "left" | "right" | "sidebar-left" | "sidebar-right";
+  position: "full" | "left" | "right" | "sidebar-left" | "sidebar-right" | "inline";
+  afterCategoryPosition: number;
   headlineSize: "sm" | "md" | "lg";
   subtextSize: "sm" | "md" | "lg";
   headlineBold: boolean;
@@ -308,19 +309,40 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     );
   };
 
-  const PromoCard = ({ promo }: { promo: PromoBanner }) => {
+  // Computes a vertical stacking position for each sidebar banner, so
+  // multiple banners on the same side (left or right) stack one below the
+  // other instead of overlapping at the exact same spot. Order follows the
+  // promos array order (which the merchant controls via the up/down
+  // reorder buttons in the dashboard).
+  const sidebarOffsets = React.useMemo(() => {
+    const offsets: Record<string, number> = {};
+    let leftCumulative = 96;
+    let rightCumulative = 96;
+    promos.forEach((p) => {
+      if (p.position === "sidebar-left") {
+        offsets[p.id] = leftCumulative;
+        leftCumulative += (p.height || 220) + 16;
+      } else if (p.position === "sidebar-right") {
+        offsets[p.id] = rightCumulative;
+        rightCumulative += (p.height || 220) + 16;
+      }
+    });
+    return offsets;
+  }, [promos]);
+
+  const PromoCard = ({ promo, topOffset }: { promo: PromoBanner; topOffset?: number }) => {
     const isSidebar = promo.position === "sidebar-left" || promo.position === "sidebar-right";
 
     const content = (
       <div
         className={
           isSidebar
-            ? `hidden lg:block fixed ${promo.position === "sidebar-left" ? "left-4" : "right-4"} top-24 z-[999] rounded-2xl overflow-hidden bg-gray-100 shadow-xl`
+            ? `hidden lg:block fixed ${promo.position === "sidebar-left" ? "left-4" : "right-4"} z-[999] rounded-2xl overflow-hidden bg-gray-100 shadow-xl`
             : `rounded-2xl overflow-hidden relative bg-gray-100 ${promo.position === "full" ? "w-full" : "w-full sm:w-[calc(50%-6px)]"}`
         }
         style={
           isSidebar
-            ? { height: `${promo.height || 220}px`, width: `${promo.width || 160}px` }
+            ? { height: `${promo.height || 220}px`, width: `${promo.width || 160}px`, top: `${topOffset ?? 96}px` }
             : { height: `${promo.height || 220}px` }
         }
       >
@@ -515,10 +537,10 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </aside>
 
         <div className="flex-1 min-w-0">
-          {promos.length > 0 && (
+          {promos.filter((p) => p.position !== "inline").length > 0 && (
             <div className="px-4 pt-4 flex flex-wrap gap-3">
-              {promos.map((promo) => (
-                <PromoCard key={promo.id} promo={promo} />
+              {promos.filter((p) => p.position !== "inline").map((promo) => (
+                <PromoCard key={promo.id} promo={promo} topOffset={sidebarOffsets[promo.id]} />
               ))}
             </div>
           )}
@@ -591,63 +613,75 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
 
           {!filtersActive && !isLoading && (
             <div className="pt-6 space-y-8">
-              {categories.map((category) => {
+              {categories.map((category, categoryIndex) => {
                 const allItems = products.filter((p) => p.category === category);
                 if (allItems.length === 0) return null;
                 const isExpanded = !!expandedCategories[category];
                 const previewItems = allItems.slice(0, 16);
+                const inlinePromosHere = promos.filter(
+                  (p) => p.position === "inline" && p.afterCategoryPosition === categoryIndex + 1
+                );
                 return (
-                  <div key={category}>
-                    <button
-                      onClick={() => toggleCategoryExpanded(category)}
-                      className="w-full px-4 flex items-center justify-between mb-3 cursor-pointer"
-                    >
-                      <div className="flex items-center gap-2">
-                        <h2 className="text-lg font-extrabold text-gray-900">{category}</h2>
-                        <span className="text-xs text-gray-400 font-semibold">({allItems.length})</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        {!isExpanded && (
-                          <>
-                            <span
-                              role="button"
-                              onClick={(e) => { e.stopPropagation(); scrollRow(category, -1); }}
-                              className="w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition cursor-pointer"
-                              aria-label={`Scroll ${category} left`}
-                            >
-                              <ChevronLeft className="w-4 h-4 text-gray-700" />
-                            </span>
-                            <span
-                              role="button"
-                              onClick={(e) => { e.stopPropagation(); scrollRow(category, 1); }}
-                              className="w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition cursor-pointer"
-                              aria-label={`Scroll ${category} right`}
-                            >
-                              <ChevronRight className="w-4 h-4 text-gray-700" />
-                            </span>
-                          </>
-                        )}
-                        <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform ml-1 ${isExpanded ? "rotate-180" : ""}`} />
-                      </div>
-                    </button>
-                    {isExpanded ? (
-                      <div className="px-4 grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-                        {allItems.map((product) => (
-                          <ProductCard key={product.id} product={product} />
-                        ))}
-                      </div>
-                    ) : (
-                      <div
-                        ref={(el) => { if (el) rowRefs.current.set(category, el); }}
-                        className="flex gap-3 overflow-x-auto snap-x snap-mandatory px-4 pb-2 scrollbar-hide"
-                        style={{ scrollbarWidth: "none" }}
+                  <React.Fragment key={category}>
+                    <div>
+                      <button
+                        onClick={() => toggleCategoryExpanded(category)}
+                        className="w-full px-4 flex items-center justify-between mb-3 cursor-pointer"
                       >
-                        {previewItems.map((product) => (
-                          <ProductCard key={product.id} product={product} />
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-lg font-extrabold text-gray-900">{category}</h2>
+                          <span className="text-xs text-gray-400 font-semibold">({allItems.length})</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {!isExpanded && (
+                            <>
+                              <span
+                                role="button"
+                                onClick={(e) => { e.stopPropagation(); scrollRow(category, -1); }}
+                                className="w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition cursor-pointer"
+                                aria-label={`Scroll ${category} left`}
+                              >
+                                <ChevronLeft className="w-4 h-4 text-gray-700" />
+                              </span>
+                              <span
+                                role="button"
+                                onClick={(e) => { e.stopPropagation(); scrollRow(category, 1); }}
+                                className="w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition cursor-pointer"
+                                aria-label={`Scroll ${category} right`}
+                              >
+                                <ChevronRight className="w-4 h-4 text-gray-700" />
+                              </span>
+                            </>
+                          )}
+                          <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform ml-1 ${isExpanded ? "rotate-180" : ""}`} />
+                        </div>
+                      </button>
+                      {isExpanded ? (
+                        <div className="px-4 grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+                          {allItems.map((product) => (
+                            <ProductCard key={product.id} product={product} />
+                          ))}
+                        </div>
+                      ) : (
+                        <div
+                          ref={(el) => { if (el) rowRefs.current.set(category, el); }}
+                          className="flex gap-3 overflow-x-auto snap-x snap-mandatory px-4 pb-2 scrollbar-hide"
+                          style={{ scrollbarWidth: "none" }}
+                        >
+                          {previewItems.map((product) => (
+                            <ProductCard key={product.id} product={product} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {inlinePromosHere.length > 0 && (
+                      <div className="px-4 flex flex-wrap gap-3">
+                        {inlinePromosHere.map((promo) => (
+                          <PromoCard key={promo.id} promo={promo} topOffset={sidebarOffsets[promo.id]} />
                         ))}
                       </div>
                     )}
-                  </div>
+                  </React.Fragment>
                 );
               })}
             </div>
