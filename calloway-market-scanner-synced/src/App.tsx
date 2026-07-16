@@ -165,8 +165,8 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0C0B0A] flex flex-col font-sans text-[#F4F1ED]">
-      <header className="sticky top-0 bg-[#0C0B0A] border-b border-[#F4F1ED]/10 z-40 shadow-xs">
+    <div className="min-h-screen bg-white flex flex-col font-sans text-gray-900">
+      <header className="sticky top-0 bg-white border-b border-gray-100 z-40 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-20">
             <div 
@@ -250,25 +250,25 @@ export default function App() {
         )}
       </main>
 
-      <footer className="bg-[#0C0B0A] border-t border-[#F4F1ED]/10 py-8 text-[#F4F1ED]/60 font-light">
+      <footer className="bg-white border-t border-gray-100 py-8 text-gray-500 font-light">
         <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
           <div className="flex items-start gap-2.5">
-            <MapPin className="w-4 h-4 text-[#C4A484] mt-0.5 shrink-0" />
+            <MapPin className="w-4 h-4 text-amber-900 mt-0.5 shrink-0" />
             <span>2816 Calloway Dr, Unit 100<br />Bakersfield, CA 93312</span>
           </div>
           <div className="flex items-start gap-2.5">
-            <Phone className="w-4 h-4 text-[#C4A484] mt-0.5 shrink-0" />
-            <a href="tel:+16618296889" className="hover:text-[#C4A484] transition">(661) 829-6889</a>
+            <Phone className="w-4 h-4 text-amber-900 mt-0.5 shrink-0" />
+            <a href="tel:+16618296889" className="hover:text-amber-900 transition">(661) 829-6889</a>
           </div>
           <div className="flex items-start gap-2.5">
-            <Clock className="w-4 h-4 text-[#C4A484] mt-0.5 shrink-0" />
+            <Clock className="w-4 h-4 text-amber-900 mt-0.5 shrink-0" />
             <span>Mon–Thu: 6AM–12AM<br />Fri–Sat: 6AM–2AM<br />Sun: 7AM–11PM</span>
           </div>
         </div>
-        <div className="max-w-7xl mx-auto px-4 mt-6 pt-6 border-t border-[#F4F1ED]/10 text-center text-xs">
+        <div className="max-w-7xl mx-auto px-4 mt-6 pt-6 border-t border-gray-100 text-center text-xs">
           <div 
             onClick={() => setIsPasscodeModalOpen(true)}
-            className="cursor-pointer hover:text-[#C4A484] transition active:scale-98 font-medium inline-block"
+            className="cursor-pointer hover:text-amber-900 transition active:scale-98 font-medium inline-block"
             title="Merchant Login"
           >
             <span>© 2026 Calloway Market.</span>
@@ -279,7 +279,7 @@ export default function App() {
       {showScrollTop && (
         <button
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          className="fixed bottom-6 right-6 z-30 w-11 h-11 rounded-full bg-[#C4A484] text-black flex items-center justify-center shadow-lg hover:bg-[#b8956f] transition cursor-pointer"
+          className="fixed bottom-6 right-6 z-30 w-11 h-11 rounded-full bg-[#E4002B] text-white flex items-center justify-center shadow-lg hover:bg-[#c40025] transition cursor-pointer"
           title="Back to top"
         >
           <ArrowUp className="w-5 h-5" />
@@ -287,32 +287,32 @@ export default function App() {
       )}
 
       {isPasscodeModalOpen && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-[#121110] rounded-2xl border border-[#F4F1ED]/10 max-w-sm w-full p-6 shadow-2xl relative space-y-4">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl border border-gray-200 max-w-sm w-full p-6 shadow-2xl relative space-y-4">
             <button
               onClick={() => {
                 setIsPasscodeModalOpen(false);
                 setPasscode("");
                 setPasscodeError("");
               }}
-              className="absolute top-4 right-4 text-[#F4F1ED]/40 hover:text-[#F4F1ED]/70 text-sm cursor-pointer"
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 text-sm cursor-pointer"
             >
               ✕
             </button>
             
             <div className="text-center space-y-2">
-              <div className="w-12 h-12 bg-[#C4A484]/10 text-[#C4A484] rounded-full flex items-center justify-center mx-auto border border-[#C4A484]/20">
+              <div className="w-12 h-12 bg-amber-50 text-amber-900 rounded-full flex items-center justify-center mx-auto border border-amber-200">
                 <Lock className="w-5 h-5" />
               </div>
-              <h3 className="font-serif italic text-lg text-[#F4F1ED]">Merchant Authentication</h3>
-              <p className="text-xs text-[#F4F1ED]/50 font-light leading-relaxed">
+              <h3 className="font-serif italic text-lg text-gray-900">Merchant Authentication</h3>
+              <p className="text-xs text-gray-500 font-light leading-relaxed">
                 Please enter the secure Calloway Market passcode to activate store inventory and real-time demand insights.
               </p>
             </div>
 
             <form onSubmit={handleUnlock} className="space-y-4">
               <div className="space-y-1">
-                <label className="block text-[9px] uppercase tracking-widest font-bold text-[#F4F1ED]/40">
+                <label className="block text-[9px] uppercase tracking-widest font-bold text-gray-400">
                   Access Key Passcode
                 </label>
                 <input
@@ -325,12 +325,12 @@ export default function App() {
                     setPasscode(e.target.value);
                     setPasscodeError("");
                   }}
-                  className="w-full px-3.5 py-2.5 bg-[#0C0B0A] border border-[#F4F1ED]/10 rounded-xl text-xs text-[#F4F1ED] focus:outline-none focus:ring-1 focus:ring-[#C4A484] focus:border-[#C4A484] transition text-center font-mono tracking-widest"
+                  className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition text-center font-mono tracking-widest"
                 />
               </div>
 
               {passcodeError && (
-                <div className="p-3 bg-rose-950/30 text-rose-300 rounded-xl text-[10px] font-medium flex items-center gap-2 border border-rose-900/30 leading-normal">
+                <div className="p-3 bg-rose-50 text-rose-700 rounded-xl text-[10px] font-medium flex items-center gap-2 border border-rose-200 leading-normal">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                   <span>{passcodeError}</span>
                 </div>
@@ -344,13 +344,13 @@ export default function App() {
                     setPasscode("");
                     setPasscodeError("");
                   }}
-                  className="flex-1 py-2.5 bg-[#0C0B0A] hover:bg-[#1a1816] text-[#F4F1ED]/70 text-xs font-semibold rounded-xl transition cursor-pointer border border-[#F4F1ED]/10"
+                  className="flex-1 py-2.5 bg-gray-50 hover:bg-gray-100 text-gray-600 text-xs font-semibold rounded-xl transition cursor-pointer border border-gray-200"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-[#C4A484] hover:bg-[#b8956f] text-[#0C0B0A] text-xs font-semibold rounded-xl transition cursor-pointer"
+                  className="flex-1 py-2.5 bg-amber-950 hover:bg-amber-900 text-white text-xs font-semibold rounded-xl transition cursor-pointer"
                 >
                   Authenticate
                 </button>
