@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend
@@ -100,6 +100,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [newDescription, setNewDescription] = useState("");
   const [newFoodPairing, setNewFoodPairing] = useState("");
   const [newPrice, setNewPrice] = useState("");
+  const [newUpc, setNewUpc] = useState("");
 
   // Bulk Paste State
   const [bulkText, setBulkText] = useState("");
@@ -180,9 +181,47 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
-  // Promo banners — an editable, reorderable list of photo/video banners
-  // shown on the customer-facing site, loaded from and saved to
-  // /api/settings/promos.
+  // Barcode scanner — designed for a physical USB/Bluetooth barcode
+  // scanner, which works by "typing" the scanned digits into whatever text
+  // field is focused, followed by an Enter key. No camera or special
+  // library needed — just an always-ready, auto-focused input field.
+  // If the code matches an existing product, opens that product's edit
+  // form directly. If no match is found, switches to the Manual Bottle
+  // Entry tab with the scanned UPC pre-filled so it can be added as new.
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scanInputValue, setScanInputValue] = useState("");
+  const scanInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isScannerOpen && scanInputRef.current) {
+      scanInputRef.current.focus();
+    }
+  }, [isScannerOpen]);
+
+  const handleScanInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const upc = scanInputValue.trim();
+      if (upc) {
+        handleBarcodeDetected(upc);
+      }
+      setScanInputValue("");
+    }
+  };
+
+  const handleBarcodeDetected = (upc: string) => {
+    setIsScannerOpen(false);
+    const match = products.find((p: any) => p.upc && String(p.upc) === upc);
+    if (match) {
+      setUploadMessage(`Found existing product for UPC ${upc}: "${match.name}". Opening its edit form.`);
+      openEditModal(match);
+    } else {
+      setUploadTab("manual");
+      setNewUpc(upc);
+      setUploadMessage(`No existing product found for UPC ${upc}. Fill in the details below to add it as new.`);
+      logAction(`Scanned new UPC not yet in inventory: ${upc}`);
+    }
+  };
   const [promos, setPromos] = useState<PromoBanner[]>([]);
   const [isLoadingPromos, setIsLoadingPromos] = useState(true);
   const [isSavingPromos, setIsSavingPromos] = useState(false);
@@ -1022,7 +1061,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       imageColor: "from-amber-950 to-slate-900",
       iconName: "Wine",
       price: calculatedFinalPrice,
-      marginPercent: uploadMarkupMargin
+      marginPercent: uploadMarkupMargin,
+      upc: newUpc || undefined,
     };
 
     try {
@@ -1040,6 +1080,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         setNewDescription("");
         setNewFoodPairing("");
         setNewPrice("");
+        setNewUpc("");
         onRefreshAllData();
       } else {
         throw new Error("Failed to register spirit.");
@@ -1675,18 +1716,76 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
       {/* Inventory Management & Upload Hub */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-8 my-12" id="inventory-manager">
-        <div>
-          <span className="text-xs font-semibold tracking-widest text-amber-800 uppercase block mb-1">
-            Showroom Stock Management
-          </span>
-          <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
-            <Upload className="w-5 h-5 text-amber-900" />
-            Inventory Upload & Stock Registry
-          </h2>
-          <p className="text-xs text-gray-500 font-light mt-1">
-            Publish single high-end arrivals or paste bulk-imported files (JSON or CSV rows) to update Calloway Market's active customer catalog instantly.
-          </p>
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+          <div>
+            <span className="text-xs font-semibold tracking-widest text-amber-800 uppercase block mb-1">
+              Showroom Stock Management
+            </span>
+            <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
+              <Upload className="w-5 h-5 text-amber-900" />
+              Inventory Upload & Stock Registry
+            </h2>
+            <p className="text-xs text-gray-500 font-light mt-1">
+              Publish single high-end arrivals or paste bulk-imported files (JSON or CSV rows) to update Calloway Market's active customer catalog instantly.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setIsScannerOpen(true);
+            }}
+            className="px-4 py-2.5 bg-indigo-950 hover:bg-indigo-900 text-white font-semibold text-xs uppercase tracking-wider rounded-xl transition flex items-center gap-2 cursor-pointer shrink-0"
+          >
+            <Search className="w-3.5 h-3.5" />
+            Scan Barcode
+          </button>
         </div>
+
+        {/* Barcode Scanner Modal — designed for a physical barcode scanner
+            device, which just types the code into this focused input. */}
+        {isScannerOpen && (
+          <div
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            onClick={() => setIsScannerOpen(false)}
+          >
+            <div
+              className="bg-white rounded-2xl border border-gray-200 max-w-md w-full p-6 shadow-2xl space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-serif text-gray-900">Scan a Product Barcode</h3>
+                <button
+                  onClick={() => setIsScannerOpen(false)}
+                  className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-xs text-gray-500">
+                Scan the barcode with your scanner now — it types directly into the field below and submits
+                automatically. If it matches something already in your inventory, its edit form opens right away.
+                If it's brand new, you'll be switched to the Manual Bottle Entry tab with the UPC pre-filled.
+              </p>
+              <input
+                ref={scanInputRef}
+                type="text"
+                value={scanInputValue}
+                onChange={(e) => setScanInputValue(e.target.value)}
+                onKeyDown={handleScanInputKeyDown}
+                placeholder="Ready to scan..."
+                autoFocus
+                className="w-full px-4 py-3 bg-gray-50 border-2 border-dashed border-amber-300 rounded-xl text-center font-mono text-lg tracking-widest focus:outline-none focus:ring-2 focus:ring-amber-900 focus:border-amber-900 transition"
+              />
+              <button
+                type="button"
+                onClick={() => setIsScannerOpen(false)}
+                className="w-full py-2.5 border border-gray-200 text-gray-600 hover:bg-gray-50 font-semibold text-xs uppercase tracking-wider rounded-xl transition cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Tab Selector */}
         <div className="flex border-b border-gray-100 pb-px gap-2">
@@ -2030,7 +2129,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
               <div>
                 <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Origin / Distillery</label>
                 <input
@@ -2071,6 +2170,17 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   placeholder="e.g. 89.99 (Optional)"
                   value={newPrice}
                   onChange={(e) => setNewPrice(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">UPC (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="Scan or type barcode"
+                  value={newUpc}
+                  onChange={(e) => setNewUpc(e.target.value)}
                   className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
                 />
               </div>
