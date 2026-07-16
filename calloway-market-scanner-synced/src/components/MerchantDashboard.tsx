@@ -455,6 +455,112 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [manageSizeFilter, setManageSizeFilter] = useState("All");
 
   // Smart Parser for CSV and Google Sheets
+  // Maps a raw/messy category string (from a spreadsheet, or an existing
+  // product's current category) to the correct real department name.
+  // Shared by both the CSV import parser and the "Fix Existing Categories"
+  // one-time cleanup button, so both use the exact same logic.
+  const normalizeCategory = (rawCategory: string): string => {
+    let cat = rawCategory || "";
+    const catLower = cat.toLowerCase();
+    if (catLower.includes("whiskey") || catLower.includes("bourbon") || catLower.includes("scotch") || catLower.includes("rye")) {
+      cat = "Whiskey";
+    } else if (catLower.includes("tequila") || catLower.includes("mezcal")) {
+      cat = "Tequila";
+    } else if (catLower.includes("vodka")) {
+      cat = "Vodka";
+    } else if (catLower.includes("gin")) {
+      cat = "Gin";
+    } else if (catLower.includes("rum")) {
+      cat = "Rum";
+    } else if (catLower.includes("brandy") || catLower.includes("cognac")) {
+      cat = "Brandy";
+    } else if (catLower.includes("liqueur")) {
+      cat = "Liqueur";
+    } else if (catLower === "liquor" || catLower.includes("spirit")) {
+      cat = "Liquor";
+    } else if (catLower.includes("wine") || catLower.includes("cabernet") || catLower.includes("chardonnay") || catLower.includes("merlot") || catLower.includes("champagne") || catLower.includes("prosecco") || catLower.includes("sparkling")) {
+      cat = "Wine";
+    } else if (catLower.includes("beer") || catLower.includes("ipa") || catLower.includes("lager") || catLower.includes("cider")) {
+      cat = "Beer";
+    } else if (catLower.includes("rtd") || catLower.includes("seltzer") || catLower.includes("cocktail")) {
+      cat = "RTD";
+    } else if (catLower.includes("soda") || catLower.includes("coke") || catLower.includes("cola")) {
+      cat = "Soda";
+    } else if (catLower.includes("water")) {
+      cat = "Water";
+    } else if (catLower.includes("sports") || catLower.includes("energy") || catLower.includes("gatorade")) {
+      cat = "Sports & Energy Drinks";
+    } else if (catLower.includes("coffee") || catLower.includes("tea") || catLower.includes("juice")) {
+      cat = "Coffee, Tea & Juice";
+    } else if (catLower.includes("snack") || catLower.includes("chip") || catLower.includes("cookie") || catLower.includes("cracker") || catLower.includes("candy")) {
+      cat = "Snacks";
+    } else if (catLower.includes("household") || catLower.includes("supplies")) {
+      cat = "Household";
+    } else if (cat) {
+      cat = cat.charAt(0).toUpperCase() + cat.slice(1);
+    }
+    return cat;
+  };
+
+  // One-time cleanup: re-applies the correct category to every EXISTING
+  // product already in live inventory, without re-uploading anything (so
+  // there's no risk of creating duplicates). Only products whose computed
+  // category actually differs from their current one get updated; prices,
+  // names, descriptions, and everything else is left untouched.
+  const [isRecategorizing, setIsRecategorizing] = useState(false);
+  const [recategorizeProgress, setRecategorizeProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const handleRecategorizeAll = async () => {
+    const needsFix = (products || []).filter((p) => normalizeCategory(p.category) !== p.category);
+    if (needsFix.length === 0) {
+      setUploadMessage("Every product's category already matches the correct department — nothing to fix.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `${needsFix.length} product(s) will have their category corrected (e.g. moved from "Liquor" into "Whiskey"/"Tequila"/"Rum"/etc). Nothing else about these products changes. Continue?`
+      )
+    ) {
+      return;
+    }
+
+    setIsRecategorizing(true);
+    setRecategorizeProgress({ done: 0, total: needsFix.length });
+    setUploadMessage(null);
+
+    const BATCH_SIZE = 20;
+    let fixed = 0;
+    let failed = 0;
+
+    for (let i = 0; i < needsFix.length; i += BATCH_SIZE) {
+      const batch = needsFix.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map((p) =>
+          fetch(`/api/products/${p.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+            body: JSON.stringify({ category: normalizeCategory(p.category) }),
+          })
+        )
+      );
+      results.forEach((r) => {
+        if (r.status === "fulfilled" && r.value.ok) fixed++;
+        else failed++;
+      });
+      setRecategorizeProgress({ done: Math.min(i + BATCH_SIZE, needsFix.length), total: needsFix.length });
+    }
+
+    setIsRecategorizing(false);
+    setRecategorizeProgress(null);
+    setUploadMessage(
+      failed > 0
+        ? `Recategorized ${fixed} product(s). ${failed} failed — you can run this again to retry those.`
+        : `Successfully recategorized ${fixed} product(s) into their correct departments.`
+    );
+    logAction(`Fixed categories on ${fixed} existing products (moved out of generic "Liquor" into specific spirit types)`);
+    onRefreshAllData();
+  };
+
   const parseCSV = (text: string) => {
     // Clean UTF-8 BOM
     text = text.replace(/^\ufeff/i, "").trim();
@@ -602,54 +708,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           stock = "In Stock";
         }
 
-        let cat = p.category || "";
-        const catLower = cat.toLowerCase();
-        // FIX: this used to collapse every specific spirit type (Whiskey,
-        // Tequila, Rum, Vodka, Gin, Brandy, Cognac, Liqueur) into one
-        // generic "Liquor" bucket, which is exactly the opposite of what a
-        // real liquor store's department structure looks like — each spirit
-        // type is its own department for browsing/filtering. Now each one
-        // keeps its own real category name; "Liquor" is only used as a
-        // last-resort fallback when the original text is genuinely too
-        // vague to tell which specific spirit it is (e.g. just says
-        // "Liquor" or "Spirits" with no further detail).
-        if (catLower.includes("whiskey") || catLower.includes("bourbon") || catLower.includes("scotch") || catLower.includes("rye")) {
-          cat = "Whiskey";
-        } else if (catLower.includes("tequila") || catLower.includes("mezcal")) {
-          cat = "Tequila";
-        } else if (catLower.includes("vodka")) {
-          cat = "Vodka";
-        } else if (catLower.includes("gin")) {
-          cat = "Gin";
-        } else if (catLower.includes("rum")) {
-          cat = "Rum";
-        } else if (catLower.includes("brandy") || catLower.includes("cognac")) {
-          cat = "Brandy";
-        } else if (catLower.includes("liqueur")) {
-          cat = "Liqueur";
-        } else if (catLower === "liquor" || catLower.includes("spirit")) {
-          cat = "Liquor";
-        } else if (catLower.includes("wine") || catLower.includes("cabernet") || catLower.includes("chardonnay") || catLower.includes("merlot") || catLower.includes("champagne") || catLower.includes("prosecco") || catLower.includes("sparkling")) {
-          cat = "Wine";
-        } else if (catLower.includes("beer") || catLower.includes("ipa") || catLower.includes("lager") || catLower.includes("cider")) {
-          cat = "Beer";
-        } else if (catLower.includes("rtd") || catLower.includes("seltzer") || catLower.includes("cocktail")) {
-          cat = "RTD";
-        } else if (catLower.includes("soda") || catLower.includes("coke") || catLower.includes("cola")) {
-          cat = "Soda";
-        } else if (catLower.includes("water")) {
-          cat = "Water";
-        } else if (catLower.includes("sports") || catLower.includes("energy") || catLower.includes("gatorade")) {
-          cat = "Sports & Energy Drinks";
-        } else if (catLower.includes("coffee") || catLower.includes("tea") || catLower.includes("juice")) {
-          cat = "Coffee, Tea & Juice";
-        } else if (catLower.includes("snack") || catLower.includes("chip") || catLower.includes("cookie") || catLower.includes("cracker") || catLower.includes("candy")) {
-          cat = "Snacks";
-        } else if (catLower.includes("household") || catLower.includes("supplies")) {
-          cat = "Household";
-        } else if (cat) {
-          cat = cat.charAt(0).toUpperCase() + cat.slice(1);
-        }
+        const cat = normalizeCategory(p.category || "");
 
         let calculatedFinalPrice: number | undefined = undefined;
         if (p.rawPrice) {
@@ -2726,6 +2785,20 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             </p>
           </div>
           <div className="flex items-center gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={handleRecategorizeAll}
+              disabled={isRecategorizing || !products || products.length === 0}
+              className="px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 disabled:bg-gray-50 disabled:text-gray-400 border border-indigo-200/50 hover:border-indigo-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
+              title="Re-sort existing products (e.g. generic 'Liquor') into their correct specific department (Whiskey, Tequila, Rum, etc.) without re-uploading anything"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRecategorizing ? "animate-spin" : ""}`} />
+              {isRecategorizing
+                ? recategorizeProgress
+                  ? `Fixing ${recategorizeProgress.done}/${recategorizeProgress.total}...`
+                  : "Fixing..."
+                : "Fix Existing Categories"}
+            </button>
             <button
               type="button"
               onClick={handleDeleteAllInventory}
