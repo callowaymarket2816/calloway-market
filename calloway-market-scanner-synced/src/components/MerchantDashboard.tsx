@@ -20,7 +20,7 @@ interface MerchantDashboardProps {
   merchantKey: string;
 }
 
-interface PromoBanner {
+interface PromoBanner {ca
   id: string;
   mediaType: "image" | "video";
   mediaUrl: string;
@@ -2860,9 +2860,26 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              placeholder="Search active stock by name or origin..."
+              placeholder="Search active stock, or scan a barcode here..."
               value={manageSearchQuery}
               onChange={(e) => setManageSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const trimmed = manageSearchQuery.trim();
+                  // A physical barcode scanner just types into whatever
+                  // field is focused — this box included — then sends
+                  // Enter. If what got typed looks like a UPC (a long,
+                  // purely numeric string) rather than a name someone
+                  // would actually search for, treat it as a scan instead
+                  // of a text search, so it doesn't just filter the table
+                  // down to zero results.
+                  if (/^\d{8,14}$/.test(trimmed)) {
+                    e.preventDefault();
+                    setManageSearchQuery("");
+                    handleBarcodeDetected(trimmed);
+                  }
+                }
+              }}
               className="w-full pl-10 pr-4 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
             />
           </div>
