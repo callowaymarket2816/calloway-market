@@ -565,10 +565,30 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
         let cat = p.category || "";
         const catLower = cat.toLowerCase();
-        if (catLower.includes("whiskey") || catLower.includes("bourbon") || catLower.includes("scotch") || catLower.includes("rye")
-          || catLower.includes("tequila") || catLower.includes("mezcal") || catLower.includes("vodka") || catLower.includes("gin")
-          || catLower.includes("rum") || catLower.includes("brandy") || catLower.includes("cognac") || catLower.includes("liqueur")
-          || catLower === "liquor") {
+        // FIX: this used to collapse every specific spirit type (Whiskey,
+        // Tequila, Rum, Vodka, Gin, Brandy, Cognac, Liqueur) into one
+        // generic "Liquor" bucket, which is exactly the opposite of what a
+        // real liquor store's department structure looks like — each spirit
+        // type is its own department for browsing/filtering. Now each one
+        // keeps its own real category name; "Liquor" is only used as a
+        // last-resort fallback when the original text is genuinely too
+        // vague to tell which specific spirit it is (e.g. just says
+        // "Liquor" or "Spirits" with no further detail).
+        if (catLower.includes("whiskey") || catLower.includes("bourbon") || catLower.includes("scotch") || catLower.includes("rye")) {
+          cat = "Whiskey";
+        } else if (catLower.includes("tequila") || catLower.includes("mezcal")) {
+          cat = "Tequila";
+        } else if (catLower.includes("vodka")) {
+          cat = "Vodka";
+        } else if (catLower.includes("gin")) {
+          cat = "Gin";
+        } else if (catLower.includes("rum")) {
+          cat = "Rum";
+        } else if (catLower.includes("brandy") || catLower.includes("cognac")) {
+          cat = "Brandy";
+        } else if (catLower.includes("liqueur")) {
+          cat = "Liqueur";
+        } else if (catLower === "liquor" || catLower.includes("spirit")) {
           cat = "Liquor";
         } else if (catLower.includes("wine") || catLower.includes("cabernet") || catLower.includes("chardonnay") || catLower.includes("merlot") || catLower.includes("champagne") || catLower.includes("prosecco") || catLower.includes("sparkling")) {
           cat = "Wine";
