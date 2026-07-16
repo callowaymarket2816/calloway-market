@@ -464,6 +464,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [manageSearchQuery, setManageSearchQuery] = useState("");
   const [manageCategoryFilter, setManageCategoryFilter] = useState("All");
   const [manageSizeFilter, setManageSizeFilter] = useState("All");
+  const [showMissingUpcOnly, setShowMissingUpcOnly] = useState(false);
 
   // Smart Parser for CSV and Google Sheets
   // Brand-name lookups used as a fallback when a product's category is a
@@ -1355,13 +1356,16 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     new Set((products || []).map((p) => p.size).filter((s): s is string => !!s && s.trim().length > 0))
   ).sort();
 
-  const filteredActiveProducts = (products || []).filter((p) => {
+  const missingUpcCount = (products || []).filter((p: any) => !p.upc).length;
+
+  const filteredActiveProducts = (products || []).filter((p: any) => {
     const matchesSearch = p.name.toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
                           p.origin.toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
                           (p.description || "").toLowerCase().includes(manageSearchQuery.toLowerCase());
     const matchesCategory = manageCategoryFilter === "All" || p.category === manageCategoryFilter;
     const matchesSize = manageSizeFilter === "All" || p.size === manageSizeFilter;
-    return matchesSearch && matchesCategory && matchesSize;
+    const matchesUpcFilter = !showMissingUpcOnly || !p.upc;
+    return matchesSearch && matchesCategory && matchesSize && matchesUpcFilter;
   });
 
   return (
@@ -2898,6 +2902,18 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 <option key={size} value={size}>{size}</option>
               ))}
             </select>
+            <button
+              type="button"
+              onClick={() => setShowMissingUpcOnly((prev) => !prev)}
+              className={`px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition cursor-pointer shrink-0 border whitespace-nowrap ${
+                showMissingUpcOnly
+                  ? "bg-rose-600 text-white border-rose-600"
+                  : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+              }`}
+              title="Show only products that don't have a UPC attached — these won't be found by barcode scanning yet"
+            >
+              Missing UPC ({missingUpcCount})
+            </button>
           </div>
           
           <div className="flex items-center gap-2 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-none">
@@ -2941,7 +2957,14 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                     filteredActiveProducts.map((product) => (
                       <tr key={product.id} className="hover:bg-slate-50/50 transition">
                         <td className="py-3 px-4 font-medium text-slate-900 font-sans">
-                          {product.name}
+                          <div className="flex items-center gap-2">
+                            <span>{product.name}</span>
+                            {!(product as any).upc && (
+                              <span className="bg-rose-50 text-rose-600 border border-rose-200 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide shrink-0">
+                                No UPC
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="py-3 px-4 text-slate-500">
                           <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold">{product.category}</span>
