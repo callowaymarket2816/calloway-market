@@ -450,6 +450,7 @@ app.post("/api/products", requireMerchantAuth, async (req, res) => {
       price: p.price ? Number(p.price) : undefined,
       marginPercent: p.marginPercent ? Number(p.marginPercent) : undefined,
       upc: p.upc || undefined,
+      updatedAt: new Date().toISOString(),
     };
   });
 
@@ -509,6 +510,7 @@ app.patch("/api/products/:id/stock", requireMerchantAuth, async (req, res) => {
   }
   product.stockStatus =
     product.stockStatus === "In Stock" ? "Temporarily Out of Stock" : "In Stock";
+  (product as any).updatedAt = new Date().toISOString();
   await saveProductsToDisk(currentProducts);
   res.json({ success: true, id, stockStatus: product.stockStatus });
 });
@@ -530,6 +532,7 @@ app.patch("/api/products/:id/featured", requireMerchantAuth, async (req, res) =>
     return res.status(404).json({ error: `Product with ID ${id} not found.` });
   }
   product.featured = !product.featured;
+  (product as any).updatedAt = new Date().toISOString();
   await saveProductsToDisk(currentProducts);
   res.json({ success: true, id, featured: product.featured });
 });
@@ -571,6 +574,8 @@ app.patch("/api/products/:id/price", requireMerchantAuth, async (req, res) => {
     }
     product.storePrice = parsed;
   }
+
+  (product as any).updatedAt = new Date().toISOString();
 
   await saveProductsToDisk(currentProducts);
   res.json({ success: true, id, price: product.price, storePrice: product.storePrice });
@@ -621,6 +626,7 @@ app.patch("/api/products/:id", requireMerchantAuth, async (req, res) => {
       }
     }
   }
+  (product as any).updatedAt = new Date().toISOString();
 
   await saveProductsToDisk(currentProducts);
   res.json({ success: true, product });
@@ -1140,7 +1146,8 @@ app.patch("/api/settings/promos", requireMerchantAuth, async (req, res) => {
     subtext: p.subtext || "",
     buttonLabel: p.buttonLabel || "",
     buttonUrl: p.buttonUrl || "",
-    position: ["full", "left", "right", "sidebar-left", "sidebar-right"].includes(p.position) ? p.position : "full",
+    position: ["full", "left", "right", "sidebar-left", "sidebar-right", "inline"].includes(p.position) ? p.position : "full",
+    afterCategoryPosition: Number(p.afterCategoryPosition) || 1,
     headlineSize: ["sm", "md", "lg"].includes(p.headlineSize) ? p.headlineSize : "md",
     subtextSize: ["sm", "md", "lg"].includes(p.subtextSize) ? p.subtextSize : "md",
     headlineBold: !!p.headlineBold,
