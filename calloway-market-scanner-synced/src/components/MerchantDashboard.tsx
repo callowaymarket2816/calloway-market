@@ -553,7 +553,6 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // category actually differs from their current one get updated; prices,
   // names, descriptions, and everything else is left untouched.
   const [isRecategorizing, setIsRecategorizing] = useState(false);
-  const [recategorizeProgress, setRecategorizeProgress] = useState<{ done: number; total: number } | null>(null);
 
   const handleRecategorizeAll = async () => {
     const needsFix = (products || []).filter((p) => normalizeCategory(p.category) !== p.category);
@@ -570,40 +569,31 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
 
     setIsRecategorizing(true);
-    setRecategorizeProgress({ done: 0, total: needsFix.length });
     setUploadMessage(null);
 
-    const BATCH_SIZE = 20;
-    let fixed = 0;
-    let failed = 0;
-
-    for (let i = 0; i < needsFix.length; i += BATCH_SIZE) {
-      const batch = needsFix.slice(i, i + BATCH_SIZE);
-      const results = await Promise.allSettled(
-        batch.map((p) =>
-          fetch(`/api/products/${p.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
-            body: JSON.stringify({ category: normalizeCategory(p.category) }),
-          })
-        )
-      );
-      results.forEach((r) => {
-        if (r.status === "fulfilled" && r.value.ok) fixed++;
-        else failed++;
+    try {
+      // Runs as a single, safe operation on the server — one read of the
+      // current live data, one write back — instead of many simultaneous
+      // requests from the browser, which previously caused a real data-loss
+      // incident on this server's delete-and-rewrite save pattern.
+      const res = await fetch("/api/products/recategorize", {
+        method: "POST",
+        headers: { "X-Merchant-Key": merchantKey },
       });
-      setRecategorizeProgress({ done: Math.min(i + BATCH_SIZE, needsFix.length), total: needsFix.length });
+      if (res.ok) {
+        const data = await res.json();
+        setUploadMessage(`Successfully recategorized ${data.fixed} product(s) into their correct departments.`);
+        logAction(`Fixed categories on ${data.fixed} existing products (moved out of generic "Liquor" into specific spirit types)`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to fix categories.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error fixing categories: ${err.message || err}`);
+    } finally {
+      setIsRecategorizing(false);
     }
-
-    setIsRecategorizing(false);
-    setRecategorizeProgress(null);
-    setUploadMessage(
-      failed > 0
-        ? `Recategorized ${fixed} product(s). ${failed} failed — you can run this again to retry those.`
-        : `Successfully recategorized ${fixed} product(s) into their correct departments.`
-    );
-    logAction(`Fixed categories on ${fixed} existing products (moved out of generic "Liquor" into specific spirit types)`);
-    onRefreshAllData();
   };
 
   const parseCSV = (text: string) => {
@@ -2841,11 +2831,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               title="Re-sort existing products (e.g. generic 'Liquor') into their correct specific department (Whiskey, Tequila, Rum, etc.) without re-uploading anything"
             >
               <RefreshCw className={`w-4 h-4 ${isRecategorizing ? "animate-spin" : ""}`} />
-              {isRecategorizing
-                ? recategorizeProgress
-                  ? `Fixing ${recategorizeProgress.done}/${recategorizeProgress.total}...`
-                  : "Fixing..."
-                : "Fix Existing Categories"}
+              {isRecategorizing ? "Fixing..." : "Fix Existing Categories"}
             </button>
             <button
               type="button"
