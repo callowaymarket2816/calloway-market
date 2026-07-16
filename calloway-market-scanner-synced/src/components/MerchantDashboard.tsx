@@ -26,6 +26,7 @@ interface PromoBanner {
   mediaUrl: string;
   imageFit: "cover" | "contain";
   height: number;
+  width: number;
   headline: string;
   subtext: string;
   buttonLabel: string;
@@ -243,6 +244,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         mediaUrl: "",
         imageFit: "cover",
         height: 220,
+        width: 160,
         headline: "",
         subtext: "",
         buttonLabel: "",
@@ -2352,20 +2354,41 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                           </button>
                         </div>
 
-                        <div>
-                          <div className="flex items-center justify-between mb-1.5">
-                            <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">Banner Height</label>
-                            <span className="text-xs font-mono font-semibold text-amber-900">{promo.height}px</span>
+                        <div className={promo.position.startsWith("sidebar") ? "grid grid-cols-2 gap-3" : ""}>
+                          <div>
+                            <div className="flex items-center justify-between mb-1.5">
+                              <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">
+                                {promo.position.startsWith("sidebar") ? "Height" : "Banner Height"}
+                              </label>
+                              <span className="text-xs font-mono font-semibold text-amber-900">{promo.height}px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="120"
+                              max={promo.position.startsWith("sidebar") ? 800 : 400}
+                              step="10"
+                              value={promo.height}
+                              onChange={(e) => updatePromo(promo.id, "height", Number(e.target.value))}
+                              className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-amber-900"
+                            />
                           </div>
-                          <input
-                            type="range"
-                            min="120"
-                            max="400"
-                            step="10"
-                            value={promo.height}
-                            onChange={(e) => updatePromo(promo.id, "height", Number(e.target.value))}
-                            className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-amber-900"
-                          />
+                          {promo.position.startsWith("sidebar") && (
+                            <div>
+                              <div className="flex items-center justify-between mb-1.5">
+                                <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">Width</label>
+                                <span className="text-xs font-mono font-semibold text-amber-900">{promo.width}px</span>
+                              </div>
+                              <input
+                                type="range"
+                                min="100"
+                                max="320"
+                                step="10"
+                                value={promo.width}
+                                onChange={(e) => updatePromo(promo.id, "width", Number(e.target.value))}
+                                className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-amber-900"
+                              />
+                            </div>
+                          )}
                         </div>
 
                         <div>
@@ -2479,8 +2502,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                       <div className="space-y-2">
                         <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">Live Preview</label>
                         <div
-                          className="rounded-2xl overflow-hidden relative bg-gray-100 border border-gray-200"
-                          style={{ height: `${promo.height}px` }}
+                          className="rounded-2xl overflow-hidden relative bg-gray-100 border border-gray-200 mx-auto"
+                          style={{
+                            height: `${promo.height}px`,
+                            width: promo.position.startsWith("sidebar") ? `${promo.width}px` : "100%",
+                          }}
                         >
                           {promo.mediaUrl && promo.mediaType === "video" ? (
                             <video
