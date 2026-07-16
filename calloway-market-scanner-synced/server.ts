@@ -626,6 +626,81 @@ app.patch("/api/products/:id", requireMerchantAuth, async (req, res) => {
   res.json({ success: true, product });
 });
 
+// One-time cleanup: re-applies the correct category to every existing
+// product in a single, safe read-then-write operation (not many
+// simultaneous requests from the browser, which is what caused data loss
+// here previously — this server saves by replacing the whole product
+// table on every write, so concurrent writes from multiple requests can
+// race and overwrite each other with a stale snapshot). Only the category
+// field is touched; everything else about each product is preserved
+// exactly as-is.
+app.post("/api/products/recategorize", requireMerchantAuth, async (req, res) => {
+  const normalizeCategory = (rawCategory: string): string => {
+    let cat = rawCategory || "";
+    const catLower = cat.toLowerCase();
+    if (catLower.includes("whiskey") || catLower.includes("bourbon") || catLower.includes("scotch") || catLower.includes("rye")) {
+      cat = "Whiskey";
+    } else if (catLower.includes("tequila") || catLower.includes("mezcal")) {
+      cat = "Tequila";
+    } else if (catLower.includes("vodka")) {
+      cat = "Vodka";
+    } else if (catLower.includes("gin")) {
+      cat = "Gin";
+    } else if (catLower.includes("rum")) {
+      cat = "Rum";
+    } else if (catLower.includes("brandy") || catLower.includes("cognac")) {
+      cat = "Brandy";
+    } else if (catLower.includes("liqueur")) {
+      cat = "Liqueur";
+    } else if (catLower === "liquor" || catLower.includes("spirit")) {
+      cat = "Liquor";
+    } else if (catLower.includes("wine") || catLower.includes("cabernet") || catLower.includes("chardonnay") || catLower.includes("merlot") || catLower.includes("champagne") || catLower.includes("prosecco") || catLower.includes("sparkling")) {
+      cat = "Wine";
+    } else if (catLower.includes("beer") || catLower.includes("ipa") || catLower.includes("lager") || catLower.includes("cider")) {
+      cat = "Beer";
+    } else if (catLower.includes("rtd") || catLower.includes("seltzer") || catLower.includes("cocktail")) {
+      cat = "RTD";
+    } else if (catLower.includes("soda") || catLower.includes("coke") || catLower.includes("cola")) {
+      cat = "Soda";
+    } else if (catLower.includes("water")) {
+      cat = "Water";
+    } else if (catLower.includes("sports") || catLower.includes("energy") || catLower.includes("gatorade")) {
+      cat = "Sports & Energy Drinks";
+    } else if (catLower.includes("coffee") || catLower.includes("tea") || catLower.includes("juice")) {
+      cat = "Coffee, Tea & Juice";
+    } else if (catLower.includes("snack") || catLower.includes("chip") || catLower.includes("cookie") || catLower.includes("cracker") || catLower.includes("candy")) {
+      cat = "Snacks";
+    } else if (catLower.includes("household") || catLower.includes("supplies")) {
+      cat = "Household";
+    } else if (cat) {
+      cat = cat.charAt(0).toUpperCase() + cat.slice(1);
+    }
+    return cat;
+  };
+
+  try {
+    // Always load a fresh, current snapshot immediately before writing —
+    // never rely on whatever the server happened to have cached in memory
+    // from an earlier request, which is exactly what caused the previous
+    // incident under concurrent access.
+    const freshProducts = await loadProductsFromDisk();
+    let fixed = 0;
+    for (const product of freshProducts) {
+      const corrected = normalizeCategory(product.category);
+      if (corrected !== product.category) {
+        product.category = corrected;
+        fixed++;
+      }
+    }
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, fixed, total: freshProducts.length });
+  } catch (err: any) {
+    console.error("Recategorize failed:", err);
+    res.status(500).json({ error: err.message || "Recategorize failed." });
+  }
+});
+
 app.post("/api/products/sync-upc", requireMerchantAuth, async (req, res) => {
   if (!supabase) {
     return res.status(503).json({ error: "Database not configured." });
@@ -1060,6 +1135,7 @@ app.patch("/api/settings/promos", requireMerchantAuth, async (req, res) => {
     mediaUrl: p.mediaUrl || "",
     imageFit: p.imageFit === "contain" ? "contain" : "cover",
     height: Number(p.height) || 220,
+    width: Number(p.width) || 160,
     headline: p.headline || "",
     subtext: p.subtext || "",
     buttonLabel: p.buttonLabel || "",
