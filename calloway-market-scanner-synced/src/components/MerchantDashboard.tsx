@@ -7,7 +7,7 @@ import {
   TrendingUp, RefreshCw, Sparkles, MapPin, Search, AlertTriangle, 
   Layers, Package, Compass, Brain, CheckCircle, Upload, Plus, Clipboard, Check, Globe, Download,
   Link2, FileText, X, AlertCircle, Database, Info, Percent, DollarSign, Clock, Trash2,
-  PackageCheck, PackageX, Star, Pencil, Save, Video, Image as ImageIcon, ArrowUp, ArrowDown
+  PackageCheck, PackageX, Star, Pencil, Save, Video, Image as ImageIcon, ArrowUp, ArrowDown, ShoppingBag
 } from "lucide-react";
 import { AnalyticsSummary, AiInsightsResponse, Product } from "../types";
 import { motion } from "motion/react";
@@ -1339,6 +1339,29 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     : [];
 
   const activeCategoriesTotal = activeCategories.reduce((acc, cat) => acc + cat.value, 0);
+
+  // Extracts real product-level buying intent from the search log: every
+  // time a customer clicks "Add to Cart" or the Grubhub button on a
+  // specific product, it gets logged as "DoorDash Redirect: <name>" or
+  // "Grubhub Redirect: <name>". This counts those, per product, as the
+  // closest honest proxy this system has for "what's actually moving" —
+  // it is NOT connected to a cash register/POS, so this reflects real
+  // clicked buying intent, not confirmed completed sales.
+  const mostOrderedProducts = (() => {
+    if (!analytics) return [];
+    const counts: Record<string, number> = {};
+    analytics.recentSearches.forEach((s) => {
+      const match = s.query.match(/^(?:DoorDash|Grubhub) Redirect: (.+)$/);
+      if (match && match[1] && match[1] !== "Store Order") {
+        const name = match[1];
+        counts[name] = (counts[name] || 0) + 1;
+      }
+    });
+    return Object.entries(counts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+  })();
   const activeBrandsTotal = activeBrands.reduce((acc, brand) => acc + brand.value, 0);
 
   // Every distinct size value currently in inventory, sorted, for the size
@@ -1346,6 +1369,14 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // but still shown when "All" is selected.
   const uniqueSizes = Array.from(
     new Set((products || []).map((p) => p.size).filter((s): s is string => !!s && s.trim().length > 0))
+  ).sort();
+
+  // Every distinct category actually present in live inventory right now —
+  // used instead of a fixed hardcoded list, so any real department (like
+  // "Add On" or anything else that exists in your data) is always
+  // selectable/filterable, not just a preset handful of names.
+  const uniqueCategories = Array.from(
+    new Set((products || []).map((p) => p.category).filter((c): c is string => !!c && c.trim().length > 0))
   ).sort();
 
   const missingUpcCount = (products || []).filter((p: any) => !p.upc).length;
@@ -1709,6 +1740,44 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             ) : (
               <div className="py-8 text-center text-gray-400 text-sm font-light">
                 No organic searches registered yet today.
+              </div>
+            )}
+          </div>
+
+          {/* Most Ordered Products — real click-through demand */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs space-y-4">
+            <div className="flex items-center gap-2">
+              <ShoppingBag className="w-5 h-5 text-[#E4002B]" />
+              <div>
+                <h3 className="font-serif text-lg text-gray-900">Most Ordered Products</h3>
+                <p className="text-[10px] text-gray-400 font-light">Based on real DoorDash/Grubhub click-throughs — not connected to a cash register.</p>
+              </div>
+            </div>
+
+            {isLoadingAnalytics ? (
+              <div className="space-y-3 py-6">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-8 bg-gray-50 rounded-lg animate-pulse" />
+                ))}
+              </div>
+            ) : mostOrderedProducts.length > 0 ? (
+              <div className="space-y-2">
+                {mostOrderedProducts.map((item, idx) => (
+                  <div key={item.name} className="flex items-center justify-between p-3 bg-gray-50/75 rounded-xl border border-gray-100">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-gray-400 font-bold text-[10px] w-4 shrink-0">#{idx + 1}</span>
+                      <span className="text-sm font-semibold text-gray-800 truncate">{item.name}</span>
+                    </div>
+                    <div className="flex items-center gap-1 bg-white border border-gray-200/50 px-2.5 py-1 rounded-lg text-xs font-semibold text-gray-700 font-mono shrink-0">
+                      <span>{item.count}</span>
+                      <span className="text-[9px] text-gray-400 uppercase font-bold">clicks</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-8 text-center text-gray-400 text-sm font-light">
+                No product order clicks logged yet. This fills in as customers click "Add to Cart" or Grubhub on specific products.
               </div>
             )}
           </div>
@@ -2195,29 +2264,23 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
               <div>
                 <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Category</label>
-                <select
+                <input
+                  type="text"
+                  list="manual-category-options"
                   value={newCategory}
                   onChange={(e) => setNewCategory(e.target.value)}
+                  placeholder="Pick an existing one or type a brand new department"
                   className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
-                >
-                  <option value="Whiskey">Whiskey</option>
-                  <option value="Tequila">Tequila</option>
-                  <option value="Vodka">Vodka</option>
-                  <option value="Gin">Gin</option>
-                  <option value="Rum">Rum</option>
-                  <option value="Brandy">Brandy</option>
-                  <option value="Liqueur">Liqueur</option>
-                  <option value="Liquor">Liquor (general)</option>
-                  <option value="Wine">Wine</option>
-                  <option value="Beer">Beer</option>
-                  <option value="RTD">RTD</option>
-                  <option value="Soda">Soda</option>
-                  <option value="Water">Water</option>
-                  <option value="Sports & Energy Drinks">Sports & Energy Drinks</option>
-                  <option value="Coffee, Tea & Juice">Coffee, Tea & Juice</option>
-                  <option value="Snacks">Snacks</option>
-                  <option value="Household">Household</option>
-                </select>
+                />
+                <datalist id="manual-category-options">
+                  {uniqueCategories.map((cat) => (
+                    <option key={cat} value={cat} />
+                  ))}
+                </datalist>
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Suggestions come from your real live inventory — type any new department name (like "Add On") if
+                  it doesn't exist yet.
+                </p>
               </div>
 
               <div>
@@ -2942,7 +3005,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           
           <div className="flex items-center gap-2 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-none">
             <span className="text-xs text-gray-400 shrink-0 uppercase font-bold tracking-wider mr-1">Filter:</span>
-            {["All", "Whiskey", "Tequila", "Vodka", "Gin", "Rum", "Brandy", "Liqueur", "Liquor", "Wine", "Beer", "RTD", "Soda", "Water", "Sports & Energy Drinks", "Coffee, Tea & Juice", "Snacks", "Household"].map((cat) => (
+            {["All", ...uniqueCategories].map((cat) => (
               <button
                 type="button"
                 key={cat}
