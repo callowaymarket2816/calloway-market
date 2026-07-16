@@ -172,16 +172,12 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
   };
 
   const categories = Array.from(new Set(products.map((p) => p.category).filter(Boolean)));
-  const uniqueSizes = Array.from(
-    new Set(products.map((p) => p.size).filter((s): s is string => !!s && s.trim().length > 0))
-  ).sort();
 
   const [filterCategory, setFilterCategory] = useState("All");
-  const [filterSize, setFilterSize] = useState("All");
 
   const term = searchTerm.toLowerCase();
   const searchActive = term.trim().length >= 2;
-  const filtersActive = searchActive || filterCategory !== "All" || filterSize !== "All";
+  const filtersActive = searchActive || filterCategory !== "All";
 
   const searchResults = products.filter((product) => {
     const matchesSearch = !searchActive || (
@@ -192,18 +188,12 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
       product.tastingNotes.some((note) => note.toLowerCase().includes(term))
     );
     const matchesCategory = filterCategory === "All" || product.category === filterCategory;
-    const matchesSize = filterSize === "All" || product.size === filterSize;
-    return matchesSearch && matchesCategory && matchesSize;
+    return matchesSearch && matchesCategory;
   });
 
   const handleFilterCategoryChange = (value: string) => {
     setFilterCategory(value);
     if (value !== "All") onSearchLog(`Filter: Category = ${value}`, value);
-  };
-
-  const handleFilterSizeChange = (value: string) => {
-    setFilterSize(value);
-    if (value !== "All") onSearchLog(`Filter: Size = ${value}`, filterCategory);
   };
 
   const handleSearchSubmit = (e?: React.FormEvent) => {
@@ -449,23 +439,10 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
               <option key={cat} value={cat}>{cat}</option>
             ))}
           </select>
-          <select
-            value={filterSize}
-            onChange={(e) => handleFilterSizeChange(e.target.value)}
-            className="flex-1 px-3 py-2 bg-gray-100 rounded-full text-xs font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#E4002B]/30 cursor-pointer"
-          >
-            <option value="All">All Sizes</option>
-            {uniqueSizes.map((size) => (
-              <option key={size} value={size}>{size}</option>
-            ))}
-          </select>
-          {(filterCategory !== "All" || filterSize !== "All") && (
+          {filterCategory !== "All" && (
             <button
               type="button"
-              onClick={() => {
-                setFilterCategory("All");
-                setFilterSize("All");
-              }}
+              onClick={() => setFilterCategory("All")}
               className="px-4 py-2 bg-gray-900 text-white rounded-full text-xs font-semibold hover:bg-gray-800 transition cursor-pointer shrink-0"
             >
               Clear
@@ -480,13 +457,10 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           <div className="sticky top-24 space-y-6 bg-white border border-gray-200 rounded-2xl p-4 max-h-[calc(100vh-7rem)] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">Filters</h3>
-              {(filterCategory !== "All" || filterSize !== "All") && (
+              {filterCategory !== "All" && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setFilterCategory("All");
-                    setFilterSize("All");
-                  }}
+                  onClick={() => setFilterCategory("All")}
                   className="text-[10px] font-bold uppercase text-[#E4002B] hover:underline cursor-pointer"
                 >
                   Clear
@@ -509,26 +483,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                     className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition cursor-pointer ${filterCategory === cat ? "bg-[#E4002B] text-white" : "text-gray-600 hover:bg-gray-50"}`}
                   >
                     {cat}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <h4 className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-2">Size</h4>
-              <div className="space-y-1">
-                <button
-                  onClick={() => handleFilterSizeChange("All")}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition cursor-pointer ${filterSize === "All" ? "bg-[#E4002B] text-white" : "text-gray-600 hover:bg-gray-50"}`}
-                >
-                  All Sizes
-                </button>
-                {uniqueSizes.map((size) => (
-                  <button
-                    key={size}
-                    onClick={() => handleFilterSizeChange(size)}
-                    className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition cursor-pointer ${filterSize === size ? "bg-[#E4002B] text-white" : "text-gray-600 hover:bg-gray-50"}`}
-                  >
-                    {size}
                   </button>
                 ))}
               </div>
@@ -588,13 +542,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           {filtersActive && (
             <div className="px-4 pt-6 space-y-4">
               <h2 className="text-lg font-extrabold text-gray-900">
-                {searchActive
-                  ? `Results for "${searchTerm}"`
-                  : filterCategory !== "All" && filterSize !== "All"
-                    ? `${filterCategory} — ${filterSize}`
-                    : filterCategory !== "All"
-                      ? filterCategory
-                      : `Size: ${filterSize}`}
+                {searchActive ? `Results for "${searchTerm}"` : filterCategory}
               </h2>
               {searchResults.length === 0 ? (
                 <div className="bg-gray-50 rounded-2xl p-8 text-center space-y-3">
