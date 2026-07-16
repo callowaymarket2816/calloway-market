@@ -31,7 +31,8 @@ interface PromoBanner {
   subtext: string;
   buttonLabel: string;
   buttonUrl: string;
-  position: "full" | "left" | "right" | "sidebar-left" | "sidebar-right";
+  position: "full" | "left" | "right" | "sidebar-left" | "sidebar-right" | "inline";
+  afterCategoryPosition: number;
   headlineSize: "sm" | "md" | "lg";
   subtextSize: "sm" | "md" | "lg";
   headlineBold: boolean;
@@ -300,6 +301,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         buttonLabel: "",
         buttonUrl: "",
         position: "full",
+        afterCategoryPosition: 1,
         headlineSize: "md",
         subtextSize: "md",
         headlineBold: true,
@@ -2202,12 +2204,19 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   <option value="Tequila">Tequila</option>
                   <option value="Vodka">Vodka</option>
                   <option value="Gin">Gin</option>
-                  <option value="Wine">Wine</option>
-                  <option value="Champagne">Champagne</option>
-                  <option value="Craft Beer">Craft Beer</option>
+                  <option value="Rum">Rum</option>
+                  <option value="Brandy">Brandy</option>
                   <option value="Liqueur">Liqueur</option>
-                  <option value="Snack">Snack</option>
+                  <option value="Liquor">Liquor (general)</option>
+                  <option value="Wine">Wine</option>
+                  <option value="Beer">Beer</option>
+                  <option value="RTD">RTD</option>
                   <option value="Soda">Soda</option>
+                  <option value="Water">Water</option>
+                  <option value="Sports & Energy Drinks">Sports & Energy Drinks</option>
+                  <option value="Coffee, Tea & Juice">Coffee, Tea & Juice</option>
+                  <option value="Snacks">Snacks</option>
+                  <option value="Household">Household</option>
                 </select>
               </div>
 
@@ -2544,23 +2553,52 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                             <button
                               type="button"
                               onClick={() => updatePromo(promo.id, "position", "sidebar-left")}
-                              className={`py-2 rounded-lg text-[11px] font-bold uppercase transition col-span-1 ${promo.position === "sidebar-left" ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-600"}`}
+                              className={`py-2 rounded-lg text-[11px] font-bold uppercase transition ${promo.position === "sidebar-left" ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-600"}`}
                             >
                               Side (Left)
                             </button>
                             <button
                               type="button"
                               onClick={() => updatePromo(promo.id, "position", "sidebar-right")}
-                              className={`py-2 rounded-lg text-[11px] font-bold uppercase transition col-span-2 ${promo.position === "sidebar-right" ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-600"}`}
+                              className={`py-2 rounded-lg text-[11px] font-bold uppercase transition ${promo.position === "sidebar-right" ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-600"}`}
                             >
                               Side (Right)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updatePromo(promo.id, "position", "inline")}
+                              className={`py-2 rounded-lg text-[11px] font-bold uppercase transition ${promo.position === "inline" ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-600"}`}
+                            >
+                              Between Categories
                             </button>
                           </div>
                           {(promo.position === "sidebar-left" || promo.position === "sidebar-right") && (
                             <p className="text-[10px] text-amber-700 mt-1.5">
                               Side banners pin to the edge of the screen and stay visible while scrolling. They only show on
-                              larger screens (tablet/desktop) — there's no room for them on phones.
+                              larger screens (tablet/desktop) — there's no room for them on phones. If you add more than one
+                              banner to the same side, they now stack vertically in order (use the up/down arrows above to
+                              control which one appears first). For a wide/landscape photo, try a larger Width and shorter
+                              Height; for a tall/portrait photo, try a narrower Width and taller Height — use "Contain" below
+                              so the whole photo shows without being cropped or stretched, regardless of its shape.
                             </p>
+                          )}
+                          {promo.position === "inline" && (
+                            <div className="mt-2 space-y-1.5">
+                              <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">
+                                Insert After Category Number
+                              </label>
+                              <input
+                                type="number"
+                                min="1"
+                                value={promo.afterCategoryPosition}
+                                onChange={(e) => updatePromo(promo.id, "afterCategoryPosition", Math.max(1, Number(e.target.value)))}
+                                className="w-full px-3.5 py-2 bg-white border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+                              />
+                              <p className="text-[10px] text-amber-700">
+                                e.g. enter "2" to show this banner right after the 2nd category section a customer
+                                scrolls past on the home page (counting from the top, in the order categories appear).
+                              </p>
+                            </div>
                           )}
                         </div>
 
@@ -2592,7 +2630,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                             <input
                               type="range"
                               min="120"
-                              max={promo.position.startsWith("sidebar") ? 800 : 400}
+                              max={promo.position.startsWith("sidebar") ? 1200 : 400}
                               step="10"
                               value={promo.height}
                               onChange={(e) => updatePromo(promo.id, "height", Number(e.target.value))}
@@ -2608,7 +2646,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                               <input
                                 type="range"
                                 min="100"
-                                max="320"
+                                max="500"
                                 step="10"
                                 value={promo.width}
                                 onChange={(e) => updatePromo(promo.id, "width", Number(e.target.value))}
@@ -2904,7 +2942,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           
           <div className="flex items-center gap-2 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-none">
             <span className="text-xs text-gray-400 shrink-0 uppercase font-bold tracking-wider mr-1">Filter:</span>
-            {["All", "Whiskey", "Tequila", "Vodka", "Gin", "Wine", "Champagne", "Craft Beer", "Liqueur", "Snack", "Soda"].map((cat) => (
+            {["All", "Whiskey", "Tequila", "Vodka", "Gin", "Rum", "Brandy", "Liqueur", "Liquor", "Wine", "Beer", "RTD", "Soda", "Water", "Sports & Energy Drinks", "Coffee, Tea & Juice", "Snacks", "Household"].map((cat) => (
               <button
                 type="button"
                 key={cat}
@@ -2935,6 +2973,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                     <th className="py-3 px-4">ABV</th>
                     <th className="py-3 px-4">Live Price</th>
                     <th className="py-3 px-4">Stock Status</th>
+                    <th className="py-3 px-4">Last Updated</th>
                     <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
@@ -2969,6 +3008,15 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                               ? "text-amber-600"
                               : "text-emerald-600"
                           }`}>{product.stockStatus}</span>
+                        </td>
+                        <td className="py-3 px-4 text-slate-400 text-[10px] font-mono whitespace-nowrap">
+                          {(product as any).updatedAt
+                            ? new Date((product as any).updatedAt).toLocaleDateString(undefined, {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              })
+                            : "—"}
                         </td>
                         <td className="py-3 px-4 text-right">
                           <button
@@ -3023,7 +3071,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={8} className="py-8 text-center text-gray-400 font-light">
+                      <td colSpan={9} className="py-8 text-center text-gray-400 font-light">
                         No active stock matching your search filters.
                       </td>
                     </tr>
