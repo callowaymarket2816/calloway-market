@@ -10,9 +10,10 @@
     "clean": "rm -rf dist public",
     "lint": "tsc --noEmit"
   },
-      "dependencies": {
+    "dependencies": {
     "html5-qrcode": "^2.3.8",
-    ...(your other existing dependencies stay exactly as they were)...
+    "some-other-package": "^1.0.0"
+  }
 
     "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.45.0",
