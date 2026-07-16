@@ -465,7 +465,6 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // Inventory Filtering States
   const [manageSearchQuery, setManageSearchQuery] = useState("");
   const [manageCategoryFilter, setManageCategoryFilter] = useState("All");
-  const [manageSizeFilter, setManageSizeFilter] = useState("All");
   const [showMissingUpcOnly, setShowMissingUpcOnly] = useState(false);
 
   // Smart Parser for CSV and Google Sheets
@@ -1364,13 +1363,6 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   })();
   const activeBrandsTotal = activeBrands.reduce((acc, brand) => acc + brand.value, 0);
 
-  // Every distinct size value currently in inventory, sorted, for the size
-  // filter dropdown. Blank/undefined sizes are excluded from the list itself
-  // but still shown when "All" is selected.
-  const uniqueSizes = Array.from(
-    new Set((products || []).map((p) => p.size).filter((s): s is string => !!s && s.trim().length > 0))
-  ).sort();
-
   // Every distinct category actually present in live inventory right now —
   // used instead of a fixed hardcoded list, so any real department (like
   // "Add On" or anything else that exists in your data) is always
@@ -1386,9 +1378,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                           p.origin.toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
                           (p.description || "").toLowerCase().includes(manageSearchQuery.toLowerCase());
     const matchesCategory = manageCategoryFilter === "All" || p.category === manageCategoryFilter;
-    const matchesSize = manageSizeFilter === "All" || p.size === manageSizeFilter;
     const matchesUpcFilter = !showMissingUpcOnly || !p.upc;
-    return matchesSearch && matchesCategory && matchesSize && matchesUpcFilter;
+    return matchesSearch && matchesCategory && matchesUpcFilter;
   });
 
   return (
@@ -2978,17 +2969,6 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <span className="text-xs text-gray-400 uppercase font-bold tracking-wider">Size:</span>
-            <select
-              value={manageSizeFilter}
-              onChange={(e) => setManageSizeFilter(e.target.value)}
-              className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition cursor-pointer"
-            >
-              <option value="All">All Sizes</option>
-              {uniqueSizes.map((size) => (
-                <option key={size} value={size}>{size}</option>
-              ))}
-            </select>
             <button
               type="button"
               onClick={() => setShowMissingUpcOnly((prev) => !prev)}
