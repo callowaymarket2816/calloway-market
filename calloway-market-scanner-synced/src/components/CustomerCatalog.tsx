@@ -17,6 +17,7 @@ interface PromoBanner {
   mediaUrl: string;
   imageFit: "cover" | "contain";
   height: number;
+  width: number;
   headline: string;
   subtext: string;
   buttonLabel: string;
@@ -287,10 +288,14 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
       <div
         className={
           isSidebar
-            ? `hidden lg:block fixed ${promo.position === "sidebar-left" ? "left-4" : "right-4"} top-24 z-[999] w-40 rounded-2xl overflow-hidden bg-gray-100 shadow-xl`
+            ? `hidden lg:block fixed ${promo.position === "sidebar-left" ? "left-4" : "right-4"} top-24 z-[999] rounded-2xl overflow-hidden bg-gray-100 shadow-xl`
             : `rounded-2xl overflow-hidden relative bg-gray-100 ${promo.position === "full" ? "w-full" : "w-full sm:w-[calc(50%-6px)]"}`
         }
-        style={{ height: `${promo.height || 220}px` }}
+        style={
+          isSidebar
+            ? { height: `${promo.height || 220}px`, width: `${promo.width || 160}px` }
+            : { height: `${promo.height || 220}px` }
+        }
       >
         {promo.mediaUrl && promo.mediaType === "video" ? (
           <video
