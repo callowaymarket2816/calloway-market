@@ -20,7 +20,7 @@ interface MerchantDashboardProps {
   merchantKey: string;
 }
 
-interface PromoBanner {ca
+interface PromoBanner {
   id: string;
   mediaType: "image" | "video";
   mediaUrl: string;
@@ -137,6 +137,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       foodPairing: product.foodPairing || "",
       tastingNotes: product.tastingNotes ? product.tastingNotes.join(", ") : "",
       imageUrl: (product as any).imageUrl || "",
+      upc: (product as any).upc || "",
     });
   };
 
@@ -156,6 +157,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         foodPairing: editForm.foodPairing,
         tastingNotes: editForm.tastingNotes,
         imageUrl: editForm.imageUrl,
+        upc: editForm.upc,
       };
       if (editForm.price !== "") payload.price = editForm.price;
       if (editForm.storePrice !== "") payload.storePrice = editForm.storePrice;
@@ -3236,6 +3238,21 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   onChange={(e) => setEditForm({ ...editForm, tastingNotes: e.target.value })}
                   className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
                 />
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">UPC Barcode</label>
+                <input
+                  type="text"
+                  placeholder="Scan or type barcode to attach it to this product"
+                  value={editForm.upc || ""}
+                  onChange={(e) => setEditForm({ ...editForm, upc: e.target.value })}
+                  className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition font-mono"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  If your barcode scanner couldn't find this product automatically, scan it here (or type the code)
+                  and save — future scans will then find it directly.
+                </p>
               </div>
 
               <div>
