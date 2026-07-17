@@ -33,6 +33,7 @@ interface PromoBanner {
   subtextItalic: boolean;
 }
 
+
 const TEXT_POSITION_CLASSES: Record<string, string> = {
   "top-left": "justify-start items-start text-left",
   "top-center": "justify-start items-center text-center",
