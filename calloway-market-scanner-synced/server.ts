@@ -756,6 +756,122 @@ app.post("/api/products/sync-upc", requireMerchantAuth, async (req, res) => {
   }
 });
 
+// Common filler/size words that don't help identify WHICH product something
+// is — stripped out before comparing names, so "750ML" or "12PK" differences
+// don't block an otherwise-good match.
+const FUZZY_STOPWORDS = new Set([
+  "the", "and", "or", "of", "with", "in", "on", "for", "a", "an",
+  "pk", "pack", "oz", "ml", "l", "ct", "count", "size", "can", "cans",
+  "bottle", "bottles",
+]);
+
+function fuzzyTokenize(name: string): Set<string> {
+  return new Set(
+    String(name)
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 2 && !/^\d+$/.test(w) && !FUZZY_STOPWORDS.has(w))
+  );
+}
+
+function fuzzyScore(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const word of a) {
+    if (b.has(word)) intersection++;
+  }
+  const union = new Set([...a, ...b]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+// Finds likely (but not certain) UPC matches for every product still
+// missing one, using fuzzy name similarity instead of requiring an exact
+// match. Returns candidates for the merchant to review and approve —
+// does NOT change any data itself, since a wrong automatic match would
+// attach the wrong barcode to the wrong product.
+app.get("/api/products/fuzzy-upc-candidates", requireMerchantAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(503).json({ error: "Database not configured." });
+  }
+  try {
+    const { data: upcRows, error } = await supabase
+      .from("upc_reference")
+      .select("product_name, upc");
+    if (error) throw error;
+    if (!upcRows || upcRows.length === 0) {
+      return res.json({ candidates: [] });
+    }
+
+    const referenceTokens = upcRows.map((row) => ({
+      name: String(row.product_name),
+      upc: String(row.upc),
+      tokens: fuzzyTokenize(String(row.product_name)),
+    }));
+
+    const freshProducts = await loadProductsFromDisk();
+    const missing = freshProducts.filter((p: any) => !p.upc);
+
+    const candidates: any[] = [];
+    for (const product of missing) {
+      const productTokens = fuzzyTokenize(product.name);
+      let best: { name: string; upc: string; score: number } | null = null;
+      for (const ref of referenceTokens) {
+        const score = fuzzyScore(productTokens, ref.tokens);
+        if (score > 0 && (!best || score > best.score)) {
+          best = { name: ref.name, upc: ref.upc, score };
+        }
+      }
+      if (best && best.score >= 0.4) {
+        candidates.push({
+          productId: product.id,
+          productName: product.name,
+          suggestedUpc: best.upc,
+          referenceName: best.name,
+          confidence: Math.round(best.score * 100),
+        });
+      }
+    }
+
+    candidates.sort((a, b) => b.confidence - a.confidence);
+    res.json({ candidates, totalMissing: missing.length });
+  } catch (err: any) {
+    console.error("Fuzzy UPC candidate search failed:", err);
+    res.status(500).json({ error: err.message || "Search failed." });
+  }
+});
+
+// Applies only the specific UPC matches the merchant reviewed and
+// approved, as one safe read-then-write operation (not many concurrent
+// requests — see the earlier recategorize endpoint for why that matters).
+app.post("/api/products/apply-upc-matches", requireMerchantAuth, async (req, res) => {
+  if (!supabase) {
+    return res.status(503).json({ error: "Database not configured." });
+  }
+  const { matches } = req.body;
+  if (!Array.isArray(matches)) {
+    return res.status(400).json({ error: "matches must be an array of { productId, upc }." });
+  }
+  try {
+    const freshProducts = await loadProductsFromDisk();
+    const matchMap = new Map<string, string>(matches.map((m: any) => [m.productId, m.upc]));
+    let applied = 0;
+    for (const product of freshProducts) {
+      const upc = matchMap.get(product.id);
+      if (upc) {
+        (product as any).upc = upc;
+        applied++;
+      }
+    }
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, applied });
+  } catch (err: any) {
+    console.error("Applying UPC matches failed:", err);
+    res.status(500).json({ error: err.message || "Failed to apply matches." });
+  }
+});
+
 app.get("/api/cron/lookup-product-images", async (req, res) => {
   const providedSecret = req.query.secret;
   if (!process.env.CRON_SECRET || providedSecret !== process.env.CRON_SECRET) {
@@ -1148,6 +1264,11 @@ app.patch("/api/settings/promos", requireMerchantAuth, async (req, res) => {
     buttonUrl: p.buttonUrl || "",
     position: ["full", "left", "right", "sidebar-left", "sidebar-right", "inline"].includes(p.position) ? p.position : "full",
     afterCategoryPosition: Number(p.afterCategoryPosition) || 1,
+    textPosition: [
+      "top-left", "top-center", "top-right",
+      "center-left", "center", "center-right",
+      "bottom-left", "bottom-center", "bottom-right",
+    ].includes(p.textPosition) ? p.textPosition : "center-left",
     headlineSize: ["sm", "md", "lg"].includes(p.headlineSize) ? p.headlineSize : "md",
     subtextSize: ["sm", "md", "lg"].includes(p.subtextSize) ? p.subtextSize : "md",
     headlineBold: !!p.headlineBold,
