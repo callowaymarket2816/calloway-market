@@ -33,6 +33,7 @@ interface PromoBanner {
   buttonUrl: string;
   position: "full" | "left" | "right" | "sidebar-left" | "sidebar-right" | "inline";
   afterCategoryPosition: number;
+  textPosition: "top-left" | "top-center" | "top-right" | "center-left" | "center" | "center-right" | "bottom-left" | "bottom-center" | "bottom-right";
   headlineSize: "sm" | "md" | "lg";
   subtextSize: "sm" | "md" | "lg";
   headlineBold: boolean;
@@ -40,6 +41,30 @@ interface PromoBanner {
   subtextBold: boolean;
   subtextItalic: boolean;
 }
+
+const TEXT_POSITION_CLASSES: Record<string, string> = {
+  "top-left": "justify-start items-start text-left",
+  "top-center": "justify-start items-center text-center",
+  "top-right": "justify-start items-end text-right",
+  "center-left": "justify-center items-start text-left",
+  "center": "justify-center items-center text-center",
+  "center-right": "justify-center items-end text-right",
+  "bottom-left": "justify-end items-start text-left",
+  "bottom-center": "justify-end items-center text-center",
+  "bottom-right": "justify-end items-end text-right",
+};
+
+const BUTTON_SELF_ALIGN: Record<string, string> = {
+  "top-left": "self-start",
+  "top-center": "self-center",
+  "top-right": "self-end",
+  "center-left": "self-start",
+  "center": "self-center",
+  "center-right": "self-end",
+  "bottom-left": "self-start",
+  "bottom-center": "self-center",
+  "bottom-right": "self-end",
+};
 
 export default function MerchantDashboard({ products, onRefreshAllData, onRunAiInsights, searchCount, merchantKey }: MerchantDashboardProps) {
   const [activityLogs, setActivityLogs] = useState<{ id: string; action: string; timestamp: string }[]>(() => {
@@ -302,6 +327,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         buttonUrl: "",
         position: "full",
         afterCategoryPosition: 1,
+        textPosition: "center-left",
         headlineSize: "md",
         subtextSize: "md",
         headlineBold: true,
@@ -1372,6 +1398,87 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   ).sort();
 
   const missingUpcCount = (products || []).filter((p: any) => !p.upc).length;
+
+  // Fuzzy UPC match recovery — finds likely (not certain) matches for
+  // products still missing a UPC, lets the merchant review each one before
+  // anything is applied, since a wrong auto-match would attach the wrong
+  // barcode to the wrong product.
+  const [upcCandidates, setUpcCandidates] = useState<any[]>([]);
+  const [isLoadingCandidates, setIsLoadingCandidates] = useState(false);
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
+  const [isApplyingMatches, setIsApplyingMatches] = useState(false);
+  const [showCandidateReview, setShowCandidateReview] = useState(false);
+
+  const handleFindUpcCandidates = async () => {
+    setIsLoadingCandidates(true);
+    setShowCandidateReview(true);
+    setUploadMessage(null);
+    try {
+      const res = await fetch("/api/products/fuzzy-upc-candidates", {
+        headers: { "X-Merchant-Key": merchantKey },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUpcCandidates(data.candidates || []);
+        // Pre-check only high-confidence matches (70%+) — lower-confidence
+        // ones are shown for review but not pre-selected, so a merchant has
+        // to actively decide on anything uncertain rather than accidentally
+        // approving a bad guess.
+        setSelectedCandidateIds(
+          new Set(data.candidates.filter((c: any) => c.confidence >= 70).map((c: any) => c.productId))
+        );
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to search for UPC matches.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error searching for matches: ${err.message || err}`);
+    } finally {
+      setIsLoadingCandidates(false);
+    }
+  };
+
+  const toggleCandidateSelected = (productId: string) => {
+    setSelectedCandidateIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(productId)) next.delete(productId);
+      else next.add(productId);
+      return next;
+    });
+  };
+
+  const handleApplySelectedMatches = async () => {
+    const matches = upcCandidates
+      .filter((c) => selectedCandidateIds.has(c.productId))
+      .map((c) => ({ productId: c.productId, upc: c.suggestedUpc }));
+    if (matches.length === 0) {
+      setUploadMessage("No matches selected to apply.");
+      return;
+    }
+    setIsApplyingMatches(true);
+    try {
+      const res = await fetch("/api/products/apply-upc-matches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ matches }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUploadMessage(`Applied ${data.applied} UPC match(es) successfully.`);
+        logAction(`Applied ${data.applied} fuzzy-matched UPC(s) after manual review`);
+        setUpcCandidates((prev) => prev.filter((c) => !selectedCandidateIds.has(c.productId)));
+        setSelectedCandidateIds(new Set());
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to apply matches.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error applying matches: ${err.message || err}`);
+    } finally {
+      setIsApplyingMatches(false);
+    }
+  };
 
   const filteredActiveProducts = (products || []).filter((p: any) => {
     const matchesSearch = p.name.toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
@@ -2651,9 +2758,41 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                               <p className="text-[10px] text-amber-700">
                                 e.g. enter "2" to show this banner right after the 2nd category section a customer
                                 scrolls past on the home page (counting from the top, in the order categories appear).
+                                This banner now displays full width automatically.
                               </p>
                             </div>
                           )}
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">
+                            Text Position on Banner
+                          </label>
+                          <div className="grid grid-cols-3 gap-1.5 w-40">
+                            {([
+                              "top-left", "top-center", "top-right",
+                              "center-left", "center", "center-right",
+                              "bottom-left", "bottom-center", "bottom-right",
+                            ] as const).map((pos) => (
+                              <button
+                                key={pos}
+                                type="button"
+                                onClick={() => updatePromo(promo.id, "textPosition", pos)}
+                                title={pos.replace("-", " ")}
+                                className={`aspect-square rounded-lg border flex items-center justify-center transition cursor-pointer ${
+                                  promo.textPosition === pos
+                                    ? "bg-amber-950 border-amber-950"
+                                    : "bg-gray-50 border-gray-200 hover:bg-gray-100"
+                                }`}
+                              >
+                                <span className={`w-2 h-2 rounded-full ${promo.textPosition === pos ? "bg-white" : "bg-gray-400"}`} />
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-gray-400 mt-1.5">
+                            Controls where the headline, subtext, and button sit inside the banner (e.g. bottom-center
+                            for a photo with empty space at the bottom).
+                          </p>
                         </div>
 
                         <div className="flex gap-2">
@@ -2845,7 +2984,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                             />
                           ) : null}
                           {(promo.headline || promo.subtext || promo.buttonLabel) && (
-                            <div className="absolute inset-0 bg-black/25 flex flex-col justify-center px-6">
+                            <div className={`absolute inset-0 bg-black/25 flex flex-col px-6 py-4 ${TEXT_POSITION_CLASSES[promo.textPosition] || TEXT_POSITION_CLASSES["center-left"]}`}>
                               {promo.headline && (
                                 <h2 className={`text-white leading-tight max-w-xs drop-shadow-lg ${
                                   promo.headlineSize === "sm" ? "text-lg" : promo.headlineSize === "lg" ? "text-4xl" : "text-2xl"
@@ -2861,7 +3000,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                                 </p>
                               )}
                               {promo.buttonLabel && (
-                                <span className="mt-3 self-start px-5 py-2 bg-white text-black text-xs font-bold rounded-full">
+                                <span className={`mt-3 px-5 py-2 bg-white text-black text-xs font-bold rounded-full ${BUTTON_SELF_ALIGN[promo.textPosition] || "self-start"}`}>
                                   {promo.buttonLabel}
                                 </span>
                               )}
@@ -2896,6 +3035,104 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               {isSavingPromos ? "Saving..." : "Save All Promo Banners"}
             </button>
           </form>
+        )}
+      </div>
+
+      {/* Fuzzy UPC Match Recovery */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="upc-recovery">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <span className="text-xs font-semibold tracking-widest text-indigo-700 uppercase block mb-1">
+              Barcode Coverage
+            </span>
+            <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
+              <Search className="w-5 h-5 text-indigo-700" />
+              Recover Missing UPCs
+            </h2>
+            <p className="text-xs text-gray-500 font-light mt-1">
+              Finds likely UPC matches for products that don't have one yet, by comparing names loosely instead of
+              requiring an exact match. Nothing is applied automatically — review each suggestion below and approve
+              only the ones that are actually correct.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleFindUpcCandidates}
+            disabled={isLoadingCandidates}
+            className="px-4 py-2.5 bg-indigo-950 hover:bg-indigo-900 text-white font-semibold text-xs uppercase tracking-wider rounded-xl transition flex items-center gap-2 cursor-pointer shrink-0"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingCandidates ? "animate-spin" : ""}`} />
+            {isLoadingCandidates ? "Searching..." : `Find Matches (${missingUpcCount} missing)`}
+          </button>
+        </div>
+
+        {showCandidateReview && !isLoadingCandidates && (
+          upcCandidates.length === 0 ? (
+            <div className="py-10 text-center border border-dashed border-gray-200 rounded-xl bg-gray-50/50">
+              <p className="text-sm text-gray-500">
+                No likely matches found for your remaining missing-UPC products. These may need a UPC typed in
+                manually via each product's edit form.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-gray-500">
+                  {selectedCandidateIds.size} of {upcCandidates.length} suggestion(s) selected. High-confidence
+                  matches (70%+) are pre-checked — review carefully before applying, especially anything under 70%.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleApplySelectedMatches}
+                  disabled={isApplyingMatches || selectedCandidateIds.size === 0}
+                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:bg-gray-300 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition cursor-pointer shrink-0"
+                >
+                  {isApplyingMatches ? "Applying..." : `Apply Selected (${selectedCandidateIds.size})`}
+                </button>
+              </div>
+              <div className="overflow-x-auto max-h-96 border border-gray-200 rounded-xl bg-white">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100 text-[10px] uppercase font-bold text-slate-400 tracking-wider sticky top-0">
+                      <th className="py-2.5 px-4 w-8"></th>
+                      <th className="py-2.5 px-4">Your Product</th>
+                      <th className="py-2.5 px-4">Matched Against</th>
+                      <th className="py-2.5 px-4">UPC</th>
+                      <th className="py-2.5 px-4">Confidence</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {upcCandidates.map((c) => (
+                      <tr key={c.productId} className="hover:bg-slate-50/50">
+                        <td className="py-2 px-4">
+                          <input
+                            type="checkbox"
+                            checked={selectedCandidateIds.has(c.productId)}
+                            onChange={() => toggleCandidateSelected(c.productId)}
+                            className="w-4 h-4 rounded text-indigo-700 border-gray-300 focus:ring-indigo-700 cursor-pointer"
+                          />
+                        </td>
+                        <td className="py-2 px-4 font-medium text-slate-800">{c.productName}</td>
+                        <td className="py-2 px-4 text-slate-500">{c.referenceName}</td>
+                        <td className="py-2 px-4 font-mono text-slate-600">{c.suggestedUpc}</td>
+                        <td className="py-2 px-4">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            c.confidence >= 70
+                              ? "bg-emerald-50 text-emerald-700"
+                              : c.confidence >= 50
+                              ? "bg-amber-50 text-amber-700"
+                              : "bg-rose-50 text-rose-700"
+                          }`}>
+                            {c.confidence}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )
         )}
       </div>
 
