@@ -24,6 +24,7 @@ interface PromoBanner {
   buttonUrl: string;
   position: "full" | "left" | "right" | "sidebar-left" | "sidebar-right" | "inline";
   afterCategoryPosition: number;
+  textPosition: "top-left" | "top-center" | "top-right" | "center-left" | "center" | "center-right" | "bottom-left" | "bottom-center" | "bottom-right";
   headlineSize: "sm" | "md" | "lg";
   subtextSize: "sm" | "md" | "lg";
   headlineBold: boolean;
@@ -31,6 +32,30 @@ interface PromoBanner {
   subtextBold: boolean;
   subtextItalic: boolean;
 }
+
+const TEXT_POSITION_CLASSES: Record<string, string> = {
+  "top-left": "justify-start items-start text-left",
+  "top-center": "justify-start items-center text-center",
+  "top-right": "justify-start items-end text-right",
+  "center-left": "justify-center items-start text-left",
+  "center": "justify-center items-center text-center",
+  "center-right": "justify-center items-end text-right",
+  "bottom-left": "justify-end items-start text-left",
+  "bottom-center": "justify-end items-center text-center",
+  "bottom-right": "justify-end items-end text-right",
+};
+
+const BUTTON_SELF_ALIGN: Record<string, string> = {
+  "top-left": "self-start",
+  "top-center": "self-center",
+  "top-right": "self-end",
+  "center-left": "self-start",
+  "center": "self-center",
+  "center-right": "self-end",
+  "bottom-left": "self-start",
+  "bottom-center": "self-center",
+  "bottom-right": "self-end",
+};
 
 const HEADLINE_SIZE_CLASSES: Record<string, string> = {
   sm: "text-lg",
@@ -328,7 +353,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         className={
           isSidebar
             ? `hidden lg:block fixed ${promo.position === "sidebar-left" ? "left-4" : "right-4"} z-[999] rounded-2xl overflow-hidden bg-gray-100 shadow-xl`
-            : `rounded-2xl overflow-hidden relative bg-gray-100 ${promo.position === "full" ? "w-full" : "w-full sm:w-[calc(50%-6px)]"}`
+            : `rounded-2xl overflow-hidden relative bg-gray-100 ${promo.position === "full" || promo.position === "inline" ? "w-full" : "w-full sm:w-[calc(50%-6px)]"}`
         }
         style={
           isSidebar
@@ -354,7 +379,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           />
         ) : null}
         {(promo.headline || promo.subtext || promo.buttonLabel) && (
-          <div className="absolute inset-0 bg-black/25 flex flex-col justify-center px-6">
+          <div className={`absolute inset-0 bg-black/25 flex flex-col px-6 py-4 ${TEXT_POSITION_CLASSES[promo.textPosition] || TEXT_POSITION_CLASSES["center-left"]}`}>
             {promo.headline && (
               <h2
                 className={`text-white leading-tight max-w-xs drop-shadow-lg ${HEADLINE_SIZE_CLASSES[promo.headlineSize] || HEADLINE_SIZE_CLASSES.md} ${promo.headlineBold ? "font-extrabold" : "font-medium"} ${promo.headlineItalic ? "italic" : ""}`}
@@ -376,7 +401,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                     ? window.open(promo.buttonUrl, "_blank")
                     : setShowGenericOrderSheet(true)
                 }
-                className="mt-3 self-start px-5 py-2 bg-white text-black text-xs font-bold rounded-full hover:bg-gray-100 transition cursor-pointer"
+                className={`mt-3 px-5 py-2 bg-white text-black text-xs font-bold rounded-full hover:bg-gray-100 transition cursor-pointer ${BUTTON_SELF_ALIGN[promo.textPosition] || "self-start"}`}
               >
                 {promo.buttonLabel}
               </button>
