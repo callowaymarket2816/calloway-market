@@ -233,6 +233,80 @@ async function fetchGoogleSearchQueries(): Promise<{ query: string; clicks: numb
   }
 }
 
+// Queries Google's public BigQuery Trends dataset for alcohol-related
+// search terms in your regional market (DMA), reusing the same service
+// account already set up for Google Search Console. Honest limitation:
+// this public dataset only contains the overall top ~25 trending terms
+// per week per region (celebrities, news, sports, etc.) — it is NOT a
+// searchable index of all search volume, so it may very often come back
+// empty if no specific liquor brand happened to be one of the literal
+// top trending searches that week. Requires billing enabled on the
+// Google Cloud project (even though actual usage cost is $0 under the
+// free tier) and the service account granted "BigQuery Job User" +
+// "BigQuery Data Viewer" roles.
+async function fetchGoogleTrendsAlcoholTerms(): Promise<{ term: string; week: string; rank: number }[]> {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
+  const dmaName = process.env.GOOGLE_TRENDS_DMA_NAME || "Bakersfield";
+
+  if (!email || !key || !projectId) {
+    console.log("Google Trends BigQuery not configured (missing service account or project ID) — skipping.");
+    return [];
+  }
+
+  try {
+    const auth = new google.auth.JWT({
+      email,
+      key: key.replace(/\\n/g, "\n"),
+      scopes: ["https://www.googleapis.com/auth/bigquery.readonly"],
+    });
+
+    const bigquery = google.bigquery({ version: "v2", auth });
+
+    const alcoholTerms = [
+      "whiskey", "bourbon", "scotch", "tequila", "mezcal", "vodka", "gin",
+      "rum", "brandy", "cognac", "liqueur", "beer", "wine", "champagne",
+      "liquor", "seltzer",
+    ];
+    const likeClauses = alcoholTerms.map((t) => `LOWER(term) LIKE '%${t}%'`).join(" OR ");
+
+    const query = `
+      SELECT term, week, rank
+      FROM \`bigquery-public-data.google_trends.top_terms\`
+      WHERE dma_name = @dmaName
+        AND (${likeClauses})
+      ORDER BY week DESC, rank ASC
+      LIMIT 25
+    `;
+
+    const response = await bigquery.jobs.query({
+      projectId,
+      requestBody: {
+        query,
+        useLegacySql: false,
+        queryParameters: [
+          {
+            name: "dmaName",
+            parameterType: { type: "STRING" },
+            parameterValue: { value: dmaName },
+          },
+        ],
+      },
+    });
+
+    const rows = response.data.rows || [];
+    return rows.map((row: any) => ({
+      term: row.f?.[0]?.v || "",
+      week: row.f?.[1]?.v || "",
+      rank: Number(row.f?.[2]?.v) || 0,
+    }));
+  } catch (err) {
+    console.error("Failed to fetch Google Trends BigQuery data:", err);
+    return [];
+  }
+}
+
 type ImageLookupResult = { url: string; source: "upcitemdb" | "openfoodfacts" | "openproductsfacts" } | null;
 
 async function tryUpcItemDb(upc: string): Promise<string | null> {
@@ -611,7 +685,7 @@ app.patch("/api/products/:id", requireMerchantAuth, async (req, res) => {
     "name", "category", "subcategory", "description", "origin", "abv", "size",
     "stockStatus", "tastingNotes", "foodPairing", "imageColor", "iconName",
     "popularity", "price", "storePrice", "marginPercent", "featured", "upc",
-    "imageUrl",
+    "imageUrl", "imageNeedsReview",
   ];
 
   for (const field of allowedFields) {
@@ -1056,6 +1130,62 @@ app.get("/api/cron/sync-google-searches", async (req, res) => {
     console.error("Scheduled Google Search Console sync failed:", err);
     res.status(500).json({ error: err.message || "Sync failed." });
   }
+});
+
+// Public read endpoint — the dashboard fetches this to display whatever
+// Google Trends alcohol data was most recently synced.
+app.get("/api/trends/alcohol", async (req, res) => {
+  if (!supabase) return res.json({ terms: [], lastSynced: null });
+  try {
+    const { data, error } = await supabase
+      .from("site_settings")
+      .select("value")
+      .eq("key", "google_trends_alcohol")
+      .maybeSingle();
+    if (error) throw error;
+    res.json(data?.value || { terms: [], lastSynced: null });
+  } catch (err) {
+    console.error("Failed to load Google Trends data:", err);
+    res.json({ terms: [], lastSynced: null });
+  }
+});
+
+async function runGoogleTrendsSync(): Promise<{ added: number; error?: string }> {
+  if (!supabase) return { added: 0, error: "Database not configured." };
+  try {
+    const terms = await fetchGoogleTrendsAlcoholTerms();
+    const value = { terms, lastSynced: new Date().toISOString() };
+    const { error } = await supabase
+      .from("site_settings")
+      .upsert({ key: "google_trends_alcohol", value }, { onConflict: "key" });
+    if (error) throw error;
+    return { added: terms.length };
+  } catch (err: any) {
+    console.error("Google Trends sync failed:", err);
+    return { added: 0, error: err.message || "Sync failed." };
+  }
+}
+
+// Manual trigger — lets the merchant test the sync directly from the
+// dashboard instead of waiting for the daily cron.
+app.post("/api/trends/sync", requireMerchantAuth, async (req, res) => {
+  const result = await runGoogleTrendsSync();
+  if (result.error) {
+    return res.status(500).json({ error: result.error });
+  }
+  res.json({ success: true, added: result.added });
+});
+
+app.get("/api/cron/sync-google-trends", async (req, res) => {
+  const providedSecret = req.query.secret;
+  if (!process.env.CRON_SECRET || providedSecret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized." });
+  }
+  const result = await runGoogleTrendsSync();
+  if (result.error) {
+    return res.status(500).json({ error: result.error });
+  }
+  res.json({ success: true, added: result.added });
 });
 
 function generateCouponCode(): string {
