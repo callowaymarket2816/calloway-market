@@ -2147,7 +2147,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             <div className="flex items-center gap-3">
               <input
                 type="range"
-                min="5"
+                min="0"
                 max="150"
                 step="5"
                 value={uploadMarkupMargin}
@@ -2157,7 +2157,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               <div className="flex gap-1 shrink-0">
                 <button
                   type="button"
-                  onClick={() => setUploadMarkupMargin(prev => Math.max(5, prev - 5))}
+                  onClick={() => setUploadMarkupMargin(prev => Math.max(0, prev - 5))}
                   className="px-2 py-1 bg-white hover:bg-slate-100 border border-gray-200 text-gray-700 text-[10px] font-bold rounded-lg transition"
                 >
                   -5%
