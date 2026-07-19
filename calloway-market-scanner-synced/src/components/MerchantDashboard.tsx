@@ -209,6 +209,33 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
+  const [isClearingPhotoId, setIsClearingPhotoId] = useState<string | null>(null);
+  const handleClearPhoto = async (id: string, name: string) => {
+    if (!window.confirm(`Remove the current photo for "${name}"? This only clears the image — nothing else about the product changes.`)) {
+      return;
+    }
+    setIsClearingPhotoId(id);
+    try {
+      const res = await fetch(`/api/products/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ imageUrl: "", imageNeedsReview: false }),
+      });
+      if (res.ok) {
+        setUploadMessage(`Photo removed for "${name}".`);
+        logAction(`Cleared photo for "${name}"`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to remove photo.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error removing photo: ${err.message || err}`);
+    } finally {
+      setIsClearingPhotoId(null);
+    }
+  };
+
   // Barcode scanner — designed for a physical USB/Bluetooth barcode
   // scanner, which works by "typing" the scanned digits into whatever text
   // field is focused, followed by an Enter key. No camera or special
@@ -492,6 +519,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [manageSearchQuery, setManageSearchQuery] = useState("");
   const [manageCategoryFilter, setManageCategoryFilter] = useState("All");
   const [showMissingUpcOnly, setShowMissingUpcOnly] = useState(false);
+  const [showNeedsPhotoReviewOnly, setShowNeedsPhotoReviewOnly] = useState(false);
 
   // Smart Parser for CSV and Google Sheets
   // Brand-name lookups used as a fallback when a product's category is a
@@ -1398,6 +1426,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   ).sort();
 
   const missingUpcCount = (products || []).filter((p: any) => !p.upc).length;
+  const needsPhotoReviewCount = (products || []).filter((p: any) => p.imageNeedsReview).length;
 
   // Fuzzy UPC match recovery — finds likely (not certain) matches for
   // products still missing a UPC, lets the merchant review each one before
@@ -1486,7 +1515,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                           (p.description || "").toLowerCase().includes(manageSearchQuery.toLowerCase());
     const matchesCategory = manageCategoryFilter === "All" || p.category === manageCategoryFilter;
     const matchesUpcFilter = !showMissingUpcOnly || !p.upc;
-    return matchesSearch && matchesCategory && matchesUpcFilter;
+    const matchesPhotoReviewFilter = !showNeedsPhotoReviewOnly || !!p.imageNeedsReview;
+    return matchesSearch && matchesCategory && matchesUpcFilter && matchesPhotoReviewFilter;
   });
 
   return (
@@ -3218,6 +3248,18 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             >
               Missing UPC ({missingUpcCount})
             </button>
+            <button
+              type="button"
+              onClick={() => setShowNeedsPhotoReviewOnly((prev) => !prev)}
+              className={`px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition cursor-pointer shrink-0 border whitespace-nowrap ${
+                showNeedsPhotoReviewOnly
+                  ? "bg-amber-600 text-white border-amber-600"
+                  : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+              }`}
+              title="Show only products whose photo came from a less certain source (not the primary UPC database) — worth a quick look to make sure it's actually correct"
+            >
+              Needs Photo Review ({needsPhotoReviewCount})
+            </button>
           </div>
           
           <div className="flex items-center gap-2 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-none">
@@ -3269,6 +3311,14 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                                 No UPC
                               </span>
                             )}
+                            {(product as any).imageNeedsReview && (
+                              <span
+                                className="bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide shrink-0"
+                                title="Photo came from a less certain source — worth a quick look"
+                              >
+                                Check Photo
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="py-3 px-4 text-slate-500">
@@ -3307,6 +3357,17 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                           >
                             <Pencil className="w-3.5 h-3.5" />
                           </button>
+                          {(product as any).imageUrl && (
+                            <button
+                              type="button"
+                              onClick={() => handleClearPhoto(product.id, product.name)}
+                              disabled={isClearingPhotoId === product.id}
+                              className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition disabled:text-gray-200 cursor-pointer inline-flex items-center mr-1"
+                              title="Remove this product's photo (e.g. if it's wrong or awkward)"
+                            >
+                              <ImageIcon className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleToggleFeatured(product.id, product.name, !!product.featured)}
