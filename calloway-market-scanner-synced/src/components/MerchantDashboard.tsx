@@ -3288,6 +3288,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-100 text-[10px] uppercase font-bold text-slate-400 tracking-wider font-mono">
+                    <th className="py-3 px-4 w-16">Photo</th>
                     <th className="py-3 px-4">Product Name</th>
                     <th className="py-3 px-4">Category</th>
                     <th className="py-3 px-4">Origin / Sourced</th>
@@ -3303,6 +3304,20 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   {filteredActiveProducts.length > 0 ? (
                     filteredActiveProducts.map((product) => (
                       <tr key={product.id} className="hover:bg-slate-50/50 transition">
+                        <td className="py-3 px-4">
+                          <div className="w-10 h-10 rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center overflow-hidden shrink-0">
+                            {(product as any).imageUrl ? (
+                              <img
+                                src={(product as any).imageUrl}
+                                alt={product.name}
+                                className="w-full h-full object-contain"
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                              />
+                            ) : (
+                              <ImageIcon className="w-4 h-4 text-gray-300" />
+                            )}
+                          </div>
+                        </td>
                         <td className="py-3 px-4 font-medium text-slate-900 font-sans">
                           <div className="flex items-center gap-2">
                             <span>{product.name}</span>
@@ -3412,7 +3427,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={9} className="py-8 text-center text-gray-400 font-light">
+                      <td colSpan={10} className="py-8 text-center text-gray-400 font-light">
                         No active stock matching your search filters.
                       </td>
                     </tr>
