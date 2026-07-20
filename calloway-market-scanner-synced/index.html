@@ -58,6 +58,18 @@
       html, body, #root {
         background-color: #ffffff !important;
       }
+
+      /* Forces every piece of text across the entire site — customer
+         catalog and merchant portal alike — into capital letters,
+         including category names, product names, buttons, and labels.
+         This is purely visual: it doesn't change any data stored in
+         your database, just how it's displayed on screen. Text typed
+         into input/search boxes will also visually appear in caps as
+         you type, even though the actual saved value keeps whatever
+         case you originally entered. */
+      #root, #root * {
+        text-transform: uppercase;
+      }
     </style>
   </head>
   <body>
