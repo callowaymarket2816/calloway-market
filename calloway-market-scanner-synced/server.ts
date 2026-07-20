@@ -341,11 +341,22 @@ function normalizeNameWords(name: string): string[] {
 }
 
 function namesLikelyMatch(ourName: string, theirName: string | undefined | null): boolean {
-  if (!theirName) return true;
+  // FIX: this used to auto-accept a photo whenever the other database
+  // didn't even provide a product name to compare against, and otherwise
+  // only required ONE single overlapping word — both of which let
+  // completely unrelated products' photos through as "matches". Now:
+  // no name from them = reject (can't verify it's the right product at
+  // all), and a real match requires at least half of our product name's
+  // meaningful words to actually appear in theirs.
+  if (!theirName) return false;
   const ourWords = new Set(normalizeNameWords(ourName));
-  const theirWords = normalizeNameWords(theirName);
-  if (ourWords.size === 0 || theirWords.length === 0) return true;
-  return theirWords.some((w) => ourWords.has(w));
+  const theirWords = new Set(normalizeNameWords(theirName));
+  if (ourWords.size === 0 || theirWords.size === 0) return false;
+  let overlap = 0;
+  for (const word of ourWords) {
+    if (theirWords.has(word)) overlap++;
+  }
+  return overlap / ourWords.size >= 0.5;
 }
 
 async function tryOpenFoodFacts(upc: string, productName: string): Promise<string | null> {
