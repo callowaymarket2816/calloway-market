@@ -1454,6 +1454,40 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   }, [merchantKey]);
   const needsPhotoReviewCount = (products || []).filter((p: any) => p.imageNeedsReview).length;
 
+  const [isRetryingPhotoLookup, setIsRetryingPhotoLookup] = useState(false);
+  const handleRetryPhotoLookup = async () => {
+    if (
+      !window.confirm(
+        "This gives every product that still has no photo a fresh shot at being found again, under the current (improved) matching logic. It doesn't change anything else. Continue?"
+      )
+    ) {
+      return;
+    }
+    setIsRetryingPhotoLookup(true);
+    setUploadMessage(null);
+    try {
+      const res = await fetch("/api/products/retry-photo-lookup", {
+        method: "POST",
+        headers: { "X-Merchant-Key": merchantKey },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUploadMessage(
+          `Reset ${data.reset} product(s) for a fresh photo lookup attempt. They'll be picked up in the next daily run (8:30 AM), or you can trigger the lookup cron manually right away if you don't want to wait.`
+        );
+        logAction(`Reset photo lookup attempts for ${data.reset} products still missing a photo`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to reset photo lookup attempts.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error resetting photo lookups: ${err.message || err}`);
+    } finally {
+      setIsRetryingPhotoLookup(false);
+    }
+  };
+
   // Fuzzy UPC match recovery — finds likely (not certain) matches for
   // products still missing a UPC, lets the merchant review each one before
   // anything is applied, since a wrong auto-match would attach the wrong
@@ -1544,6 +1578,63 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     const matchesPhotoReviewFilter = !showNeedsPhotoReviewOnly || !!p.imageNeedsReview;
     return matchesSearch && matchesCategory && matchesUpcFilter && matchesPhotoReviewFilter;
   });
+
+  // Bulk Email Broadcast — sends a message to every coupon-signup
+  // subscriber at once. Real customers receive this, so it requires an
+  // explicit confirmation showing exactly how many people will get it
+  // before anything actually sends.
+  const [broadcastSubject, setBroadcastSubject] = useState("");
+  const [broadcastMessage, setBroadcastMessage] = useState("");
+  const [subscriberCount, setSubscriberCount] = useState<number | null>(null);
+  const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
+  const [broadcastResult, setBroadcastResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/email-signup/count", { headers: { "X-Merchant-Key": merchantKey } })
+      .then((r) => r.json())
+      .then((data) => setSubscriberCount(data.count ?? null))
+      .catch(() => {});
+  }, [merchantKey]);
+
+  const handleSendBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!broadcastSubject.trim() || !broadcastMessage.trim()) return;
+    const countLabel = subscriberCount ?? "an unknown number of";
+    if (
+      !window.confirm(
+        `This will send a real email to ${countLabel} subscriber(s) right now. This can't be undone once sent. Continue?`
+      )
+    ) {
+      return;
+    }
+    setIsSendingBroadcast(true);
+    setBroadcastResult(null);
+    try {
+      const res = await fetch("/api/email-signup/broadcast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ subject: broadcastSubject, message: broadcastMessage }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBroadcastResult(
+          data.failed > 0
+            ? `Sent to ${data.sent} subscriber(s). ${data.failed} failed to send.`
+            : `Sent successfully to all ${data.sent} subscriber(s)!`
+        );
+        logAction(`Sent email broadcast "${broadcastSubject}" to ${data.sent} subscriber(s)`);
+        setBroadcastSubject("");
+        setBroadcastMessage("");
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setBroadcastResult(errData.error || "Failed to send broadcast.");
+      }
+    } catch (err: any) {
+      setBroadcastResult(`Error sending broadcast: ${err.message || err}`);
+    } finally {
+      setIsSendingBroadcast(false);
+    }
+  };
 
   return (
     <div className="space-y-8" id="merchant-view">
@@ -2034,6 +2125,69 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </div>
 
         </div>
+      </div>
+
+      {/* Bulk Email Broadcast */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="email-broadcast">
+        <div>
+          <span className="text-xs font-semibold tracking-widest text-rose-700 uppercase block mb-1">
+            Customer Email List
+          </span>
+          <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-rose-600" />
+            Bulk Email Broadcast
+          </h2>
+          <p className="text-xs text-gray-500 font-light mt-1">
+            Sends a message to everyone who's signed up for a coupon code on your site.{" "}
+            {subscriberCount !== null && (
+              <span className="font-semibold text-gray-700">Currently {subscriberCount} subscriber(s).</span>
+            )}
+          </p>
+        </div>
+
+        {broadcastResult && (
+          <div className={`p-4 rounded-xl text-xs font-medium flex items-center gap-3 border ${
+            broadcastResult.toLowerCase().includes("failed") || broadcastResult.toLowerCase().includes("error")
+              ? "bg-rose-50 text-rose-800 border-rose-200"
+              : "bg-emerald-50 text-emerald-800 border-emerald-200"
+          }`}>
+            <CheckCircle className="w-4 h-4 shrink-0" />
+            <span>{broadcastResult}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSendBroadcast} className="space-y-4">
+          <div>
+            <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Subject Line</label>
+            <input
+              type="text"
+              required
+              placeholder="e.g. This Weekend Only: 15% Off All Wine"
+              value={broadcastSubject}
+              onChange={(e) => setBroadcastSubject(e.target.value)}
+              className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Message</label>
+            <textarea
+              required
+              rows={5}
+              placeholder="Write your message here. Basic line breaks are fine — this gets sent as a simple email, not a fancy template."
+              value={broadcastMessage}
+              onChange={(e) => setBroadcastMessage(e.target.value)}
+              className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition resize-none"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={isSendingBroadcast}
+            className="px-5 py-2.5 bg-rose-700 hover:bg-rose-800 disabled:bg-gray-300 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center gap-2 cursor-pointer"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            {isSendingBroadcast ? "Sending..." : `Send to ${subscriberCount ?? "..."} Subscriber(s)`}
+          </button>
+        </form>
       </div>
 
       {/* Inventory Management & Upload Hub */}
@@ -3163,18 +3317,30 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
       {/* Photo Lookup Run History */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="photo-lookup-log">
-        <div>
-          <span className="text-xs font-semibold tracking-widest text-amber-800 uppercase block mb-1">
-            Automatic Photo Lookup
-          </span>
-          <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
-            <ImageIcon className="w-5 h-5 text-amber-900" />
-            Daily Run History
-          </h2>
-          <p className="text-xs text-gray-500 font-light mt-1">
-            Each time the daily photo lookup runs (automatically at 8:30 AM, or whenever manually triggered), the
-            result is logged here so you can check "how many did it find today" anytime, without re-running it.
-          </p>
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+          <div>
+            <span className="text-xs font-semibold tracking-widest text-amber-800 uppercase block mb-1">
+              Automatic Photo Lookup
+            </span>
+            <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
+              <ImageIcon className="w-5 h-5 text-amber-900" />
+              Daily Run History
+            </h2>
+            <p className="text-xs text-gray-500 font-light mt-1">
+              Each time the daily photo lookup runs (automatically at 8:30 AM, or whenever manually triggered), the
+              result is logged here so you can check "how many did it find today" anytime, without re-running it.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleRetryPhotoLookup}
+            disabled={isRetryingPhotoLookup}
+            className="px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 disabled:bg-gray-50 disabled:text-gray-400 border border-indigo-200/50 hover:border-indigo-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs shrink-0"
+            title="Give products with no photo a fresh lookup attempt under the current matching logic"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRetryingPhotoLookup ? "animate-spin" : ""}`} />
+            {isRetryingPhotoLookup ? "Resetting..." : "Retry Photo Lookup"}
+          </button>
         </div>
 
         {isLoadingPhotoLog ? (
