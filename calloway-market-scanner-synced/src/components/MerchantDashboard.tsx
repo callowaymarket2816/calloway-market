@@ -126,6 +126,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [newDescription, setNewDescription] = useState("");
   const [newFoodPairing, setNewFoodPairing] = useState("");
   const [newPrice, setNewPrice] = useState("");
+  const [newPriceIsFinal, setNewPriceIsFinal] = useState(false);
   const [newUpc, setNewUpc] = useState("");
 
   // Bulk Paste State
@@ -1194,7 +1195,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
     const parsedPrice = parseFloat(newPrice);
     const calculatedFinalPrice = !isNaN(parsedPrice)
-      ? Math.round(parsedPrice * (1 + uploadMarkupMargin / 100) * 100) / 100
+      ? (newPriceIsFinal ? parsedPrice : Math.round(parsedPrice * (1 + uploadMarkupMargin / 100) * 100) / 100)
       : undefined;
 
     const singleProduct = {
@@ -1426,6 +1427,20 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   ).sort();
 
   const missingUpcCount = (products || []).filter((p: any) => !p.upc).length;
+
+  // Photo lookup run history — lets you check any past day's results
+  // (including today's automatic run) without re-triggering the cron,
+  // which would just process a new batch instead of showing old results.
+  const [photoLookupRuns, setPhotoLookupRuns] = useState<any[]>([]);
+  const [isLoadingPhotoLog, setIsLoadingPhotoLog] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/photo-lookup-log", { headers: { "X-Merchant-Key": merchantKey } })
+      .then((r) => r.json())
+      .then((data) => setPhotoLookupRuns(data.runs || []))
+      .catch(() => {})
+      .finally(() => setIsLoadingPhotoLog(false));
+  }, [merchantKey]);
   const needsPhotoReviewCount = (products || []).filter((p: any) => p.imageNeedsReview).length;
 
   // Fuzzy UPC match recovery — finds likely (not certain) matches for
@@ -2461,14 +2476,35 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               </div>
 
               <div>
-                <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Base Cost / Price ($)</label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider">
+                    {newPriceIsFinal ? "Selling Price ($)" : "Base Cost / Price ($)"}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setNewPriceIsFinal((prev) => !prev)}
+                    className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full transition cursor-pointer ${
+                      newPriceIsFinal
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-gray-100 text-gray-500"
+                    }`}
+                    title="Toggle between entering a cost to mark up, or your exact final selling price"
+                  >
+                    {newPriceIsFinal ? "Using Exact Price" : `Using +${uploadMarkupMargin}% Markup`}
+                  </button>
+                </div>
                 <input
                   type="text"
-                  placeholder="e.g. 89.99 (Optional)"
+                  placeholder={newPriceIsFinal ? "e.g. 24.99 — this is exactly what customers pay" : "e.g. 89.99 (Optional)"}
                   value={newPrice}
                   onChange={(e) => setNewPrice(e.target.value)}
                   className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
                 />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  {newPriceIsFinal
+                    ? "Click the badge above to switch back to entering a cost that gets marked up automatically instead."
+                    : `Click the badge above to instead type your exact selling price directly, skipping the ${uploadMarkupMargin}% markup calculation entirely.`}
+                </p>
               </div>
 
               <div>
@@ -3065,6 +3101,60 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               {isSavingPromos ? "Saving..." : "Save All Promo Banners"}
             </button>
           </form>
+        )}
+      </div>
+
+      {/* Photo Lookup Run History */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="photo-lookup-log">
+        <div>
+          <span className="text-xs font-semibold tracking-widest text-amber-800 uppercase block mb-1">
+            Automatic Photo Lookup
+          </span>
+          <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
+            <ImageIcon className="w-5 h-5 text-amber-900" />
+            Daily Run History
+          </h2>
+          <p className="text-xs text-gray-500 font-light mt-1">
+            Each time the daily photo lookup runs (automatically at 8:30 AM, or whenever manually triggered), the
+            result is logged here so you can check "how many did it find today" anytime, without re-running it.
+          </p>
+        </div>
+
+        {isLoadingPhotoLog ? (
+          <div className="h-20 flex items-center justify-center">
+            <div className="w-6 h-6 border-2 border-amber-900 border-t-transparent rounded-full animate-spin"></div>
+          </div>
+        ) : photoLookupRuns.length === 0 ? (
+          <div className="py-8 text-center border border-dashed border-gray-200 rounded-xl bg-gray-50/50">
+            <p className="text-sm text-gray-500">No runs logged yet — this fills in after the next automatic or manual run.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto max-h-72 border border-gray-200 rounded-xl">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100 text-[10px] uppercase font-bold text-slate-400 tracking-wider sticky top-0">
+                  <th className="py-2.5 px-4">When</th>
+                  <th className="py-2.5 px-4">Attempted</th>
+                  <th className="py-2.5 px-4">Found</th>
+                  <th className="py-2.5 px-4">Remaining After</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {photoLookupRuns.map((run, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50/50">
+                    <td className="py-2 px-4 text-slate-600">
+                      {new Date(run.timestamp).toLocaleString(undefined, {
+                        month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+                      })}
+                    </td>
+                    <td className="py-2 px-4 font-mono text-slate-600">{run.attempted}</td>
+                    <td className="py-2 px-4 font-mono font-semibold text-emerald-700">{run.found}</td>
+                    <td className="py-2 px-4 font-mono text-slate-500">{run.remaining}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
