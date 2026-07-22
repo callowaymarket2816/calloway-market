@@ -344,10 +344,15 @@ function namesLikelyMatch(ourName: string, theirName: string | undefined | null)
   // FIX: this used to auto-accept a photo whenever the other database
   // didn't even provide a product name to compare against, and otherwise
   // only required ONE single overlapping word — both of which let
-  // completely unrelated products' photos through as "matches". Now:
-  // no name from them = reject (can't verify it's the right product at
-  // all), and a real match requires at least half of our product name's
-  // meaningful words to actually appear in theirs.
+  // completely unrelated products' photos through as "matches". No name
+  // from them is still a reject (can't verify it's the right product at
+  // all). For the actual overlap requirement, short product names (1-2
+  // meaningful words, e.g. "BUDWEISER") only need 1 word to match — a
+  // fixed 50% ratio was unfairly rejecting those and short names in
+  // general. Longer names need at least 40% of their meaningful words to
+  // actually appear in theirs, which is still far stricter than the
+  // original single-word rule but less likely to reject genuine matches
+  // that are just worded slightly differently between databases.
   if (!theirName) return false;
   const ourWords = new Set(normalizeNameWords(ourName));
   const theirWords = new Set(normalizeNameWords(theirName));
@@ -356,7 +361,8 @@ function namesLikelyMatch(ourName: string, theirName: string | undefined | null)
   for (const word of ourWords) {
     if (theirWords.has(word)) overlap++;
   }
-  return overlap / ourWords.size >= 0.5;
+  const minRequired = ourWords.size <= 2 ? 1 : Math.ceil(ourWords.size * 0.4);
+  return overlap >= minRequired;
 }
 
 async function tryOpenFoodFacts(upc: string, productName: string): Promise<string | null> {
@@ -992,12 +998,30 @@ app.get("/api/cron/lookup-product-images", async (req, res) => {
       await saveProductsToDisk(currentProducts);
     }
 
-    res.json({
-      success: true,
-      attempted,
-      found,
-      remaining: candidates.length - attempted,
-    });
+    const remaining = candidates.length - attempted;
+
+    // Log this run so it can be checked later (e.g. "how many did today's
+    // automatic run find?") without needing to re-trigger it, which would
+    // just process a brand new batch instead of showing past results.
+    if (supabase) {
+      try {
+        const { data: existing } = await supabase
+          .from("site_settings")
+          .select("value")
+          .eq("key", "photo_lookup_log")
+          .maybeSingle();
+        const log = (existing?.value?.runs || []) as any[];
+        log.unshift({ timestamp: new Date().toISOString(), attempted, found, remaining });
+        const trimmedLog = log.slice(0, 60); // keep the last 60 runs
+        await supabase
+          .from("site_settings")
+          .upsert({ key: "photo_lookup_log", value: { runs: trimmedLog } }, { onConflict: "key" });
+      } catch (logErr) {
+        console.error("Failed to save photo lookup log entry (run itself still succeeded):", logErr);
+      }
+    }
+
+    res.json({ success: true, attempted, found, remaining });
   } catch (err: any) {
     console.error("Product image lookup batch failed:", err);
     res.status(500).json({ error: err.message || "Batch failed." });
@@ -1145,6 +1169,48 @@ app.get("/api/cron/sync-google-searches", async (req, res) => {
 
 // Public read endpoint — the dashboard fetches this to display whatever
 // Google Trends alcohol data was most recently synced.
+// Read-only log of past photo-lookup cron runs — merchant-only, since it's
+// operational/internal detail, not something customers need.
+// Resets the "already attempted" flag on any product that still has no
+// photo, so the next photo-lookup cron run gives them a fresh shot under
+// the current (improved, better-calibrated) matching logic — rather than
+// staying permanently skipped just because an earlier, looser or overly
+// strict version of the logic already tried and failed on them.
+app.post("/api/products/retry-photo-lookup", requireMerchantAuth, async (req, res) => {
+  try {
+    const freshProducts = await loadProductsFromDisk();
+    let reset = 0;
+    for (const product of freshProducts as any[]) {
+      if (product.upc && !product.imageUrl && product.imageLookupAttempted) {
+        product.imageLookupAttempted = false;
+        reset++;
+      }
+    }
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, reset });
+  } catch (err: any) {
+    console.error("Retry photo lookup reset failed:", err);
+    res.status(500).json({ error: err.message || "Reset failed." });
+  }
+});
+
+app.get("/api/photo-lookup-log", requireMerchantAuth, async (req, res) => {
+  if (!supabase) return res.json({ runs: [] });
+  try {
+    const { data, error } = await supabase
+      .from("site_settings")
+      .select("value")
+      .eq("key", "photo_lookup_log")
+      .maybeSingle();
+    if (error) throw error;
+    res.json({ runs: data?.value?.runs || [] });
+  } catch (err) {
+    console.error("Failed to load photo lookup log:", err);
+    res.json({ runs: [] });
+  }
+});
+
 app.get("/api/trends/alcohol", async (req, res) => {
   if (!supabase) return res.json({ terms: [], lastSynced: null });
   try {
@@ -1281,6 +1347,22 @@ app.post("/api/email-signup", async (req, res) => {
   } catch (err) {
     console.error("Email signup failed:", err);
     res.status(500).json({ error: "Could not complete signup. Please try again." });
+  }
+});
+
+// Lets the dashboard show "this will send to X subscribers" before the
+// merchant actually commits to sending a broadcast to real customers.
+app.get("/api/email-signup/count", requireMerchantAuth, async (req, res) => {
+  if (!supabase) return res.json({ count: 0 });
+  try {
+    const { count, error } = await supabase
+      .from("email_signups")
+      .select("*", { count: "exact", head: true });
+    if (error) throw error;
+    res.json({ count: count || 0 });
+  } catch (err: any) {
+    console.error("Failed to count email subscribers:", err);
+    res.status(500).json({ error: err.message || "Failed to count subscribers." });
   }
 });
 
