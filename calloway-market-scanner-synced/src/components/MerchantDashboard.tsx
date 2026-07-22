@@ -1186,12 +1186,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     document.body.removeChild(link);
   };
 
+  const [pendingManualProduct, setPendingManualProduct] = useState<any | null>(null);
+
   const handleManualProductAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim()) return;
-
-    setIsUploading(true);
-    setUploadMessage(null);
 
     const parsedPrice = parseFloat(newPrice);
     const calculatedFinalPrice = !isNaN(parsedPrice)
@@ -1215,6 +1214,17 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       upc: newUpc || undefined,
     };
 
+    if (autoPublish) {
+      await publishManualProduct(singleProduct);
+    } else {
+      setPendingManualProduct(singleProduct);
+      setUploadMessage(null);
+    }
+  };
+
+  const publishManualProduct = async (singleProduct: any) => {
+    setIsUploading(true);
+    setUploadMessage(null);
     try {
       const res = await fetch("/api/products", {
         method: "POST",
@@ -1222,8 +1232,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         body: JSON.stringify({ products: singleProduct }),
       });
       if (res.ok) {
-        setUploadMessage(`Successfully added "${newName}" to active stock!`);
-        logAction(`Manually registered spirit: "${newName}" (${newCategory})`);
+        setUploadMessage(`Successfully added "${singleProduct.name}" to active stock!`);
+        logAction(`Manually registered spirit: "${singleProduct.name}" (${singleProduct.category})`);
         setNewName("");
         setNewOrigin("");
         setNewTastingNotes("");
@@ -1231,6 +1241,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         setNewFoodPairing("");
         setNewPrice("");
         setNewUpc("");
+        setPendingManualProduct(null);
         onRefreshAllData();
       } else {
         throw new Error("Failed to register spirit.");
@@ -2391,6 +2402,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
           </div>
         ) : uploadTab === "manual" ? (
+          <>
           <form onSubmit={handleManualProductAdd} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
@@ -2560,9 +2572,54 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               className="px-5 py-3 bg-amber-950 hover:bg-amber-900 text-white font-semibold text-xs uppercase tracking-wider rounded-xl transition flex items-center gap-2 cursor-pointer disabled:bg-gray-300"
             >
               <Plus className="w-4 h-4 text-amber-300" />
-              {isUploading ? "Registering..." : "Add to Live Customer Showroom"}
+              {isUploading ? "Registering..." : autoPublish ? "Add to Live Customer Showroom" : "Review Before Publishing"}
             </button>
           </form>
+
+          {pendingManualProduct && (
+            <div className="mt-6 bg-slate-50 p-5 rounded-2xl border border-amber-900/10 space-y-4">
+              <div className="flex items-center gap-2">
+                <Database className="w-4 h-4 text-amber-800" />
+                <div>
+                  <h4 className="font-serif text-sm font-semibold text-slate-800">Review Before Publishing</h4>
+                  <p className="text-[10px] text-slate-400">
+                    "Auto-Publish Directly" is off, so this hasn't gone live yet — review it, then publish or discard.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-white border border-slate-200/60 rounded-xl p-4 text-xs space-y-1.5">
+                <p><span className="font-semibold text-slate-700">Name:</span> {pendingManualProduct.name}</p>
+                <p><span className="font-semibold text-slate-700">Category:</span> {pendingManualProduct.category}</p>
+                <p><span className="font-semibold text-slate-700">Size:</span> {pendingManualProduct.size || "—"}</p>
+                <p><span className="font-semibold text-slate-700">Stock Status:</span> {pendingManualProduct.stockStatus}</p>
+                <p>
+                  <span className="font-semibold text-slate-700">Price:</span>{" "}
+                  {pendingManualProduct.price ? `$${Number(pendingManualProduct.price).toFixed(2)}` : "Not set"}
+                </p>
+                <p><span className="font-semibold text-slate-700">UPC:</span> {pendingManualProduct.upc || "Not set"}</p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => publishManualProduct(pendingManualProduct)}
+                  disabled={isUploading}
+                  className="px-4 py-2 bg-amber-950 hover:bg-amber-900 disabled:bg-gray-300 text-white font-bold text-xs uppercase tracking-wider rounded-lg transition cursor-pointer"
+                >
+                  {isUploading ? "Publishing..." : "Publish Now"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingManualProduct(null)}
+                  className="px-4 py-2 bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 font-semibold text-xs uppercase tracking-wider rounded-lg transition cursor-pointer"
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          )}
+          </>
         ) : (
           <form onSubmit={handleBulkImport} className="space-y-4">
             <div className="space-y-2">
