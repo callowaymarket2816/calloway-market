@@ -1975,7 +1975,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                     </h3>
                     <p className="text-xs text-gray-400 font-light mt-0.5">
                       {demandFilter === "google"
-                        ? "Searches tagged as Google-originated on this site. Not a live Google Trends/Search Console feed — connect Search Console separately for verified Google data."
+                        ? "Brand names extracted from real Google search terms that led people to click through to your site, via your connected Google Search Console."
                         : "Specific product labels being searched on our catalog."}
                     </p>
                   </div>
@@ -1985,7 +1985,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                     ? "bg-rose-50 text-rose-800 border-rose-200/40"
                     : "bg-indigo-50 text-indigo-800 border-indigo-200/40"
                 }`}>
-                  {demandFilter === "google" ? "Self-Reported" : "Site Catalog"}
+                  {demandFilter === "google" ? "Search Console" : "Site Catalog"}
                 </span>
               </div>
 
