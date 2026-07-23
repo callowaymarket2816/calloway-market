@@ -33,7 +33,6 @@ interface PromoBanner {
   subtextItalic: boolean;
 }
 
-
 const TEXT_POSITION_CLASSES: Record<string, string> = {
   "top-left": "justify-start items-start text-left",
   "top-center": "justify-start items-center text-center",
@@ -218,8 +217,13 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
   });
 
   const handleFilterCategoryChange = (value: string) => {
+    // FIX: clicking a category filter button is browsing/navigation, not
+    // a genuine typed search — logging it into the same search-analytics
+    // stream as real search terms was cluttering "Live Search Stream" and
+    // "Trending Local Terms" with noise (and made bot/scraper traffic
+    // that clicks through every category look like real customer search
+    // activity). Only actual typed searches get logged now.
     setFilterCategory(value);
-    if (value !== "All") onSearchLog(`Filter: Category = ${value}`, value);
   };
 
   const handleSearchSubmit = (e?: React.FormEvent) => {
@@ -1020,3 +1024,4 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     </div>
   );
 }
+
