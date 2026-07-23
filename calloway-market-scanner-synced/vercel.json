@@ -13,6 +13,10 @@
     {
       "path": "/api/cron/lookup-product-images?secret=calloway8f3k2x9",
       "schedule": "30 8 * * *"
+    },
+    {
+      "path": "/api/cron/sync-google-trends?secret=calloway8f3k2x9",
+      "schedule": "0 9 * * *"
     }
   ]
 }
