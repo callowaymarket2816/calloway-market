@@ -1586,6 +1586,48 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [broadcastSubject, setBroadcastSubject] = useState("");
   const [broadcastMessage, setBroadcastMessage] = useState("");
   const [subscriberCount, setSubscriberCount] = useState<number | null>(null);
+  const [subscriberList, setSubscriberList] = useState<any[]>([]);
+  const [isLoadingSubscribers, setIsLoadingSubscribers] = useState(false);
+  const [showSubscriberList, setShowSubscriberList] = useState(false);
+
+  const handleToggleSubscriberList = async () => {
+    if (showSubscriberList) {
+      setShowSubscriberList(false);
+      return;
+    }
+    setShowSubscriberList(true);
+    if (subscriberList.length > 0) return; // already loaded, no need to refetch
+    setIsLoadingSubscribers(true);
+    try {
+      const res = await fetch("/api/email-signup/list", { headers: { "X-Merchant-Key": merchantKey } });
+      if (res.ok) {
+        const data = await res.json();
+        setSubscriberList(data.subscribers || []);
+      }
+    } catch (err) {
+      console.error("Failed to load subscriber list:", err);
+    } finally {
+      setIsLoadingSubscribers(false);
+    }
+  };
+
+  const downloadSubscribersCsv = () => {
+    if (subscriberList.length === 0) return;
+    const headers = ["Email", "Coupon Code", "Signed Up"];
+    const rows = subscriberList.map((s) => [s.email, s.coupon_code, s.created_at]);
+    const csvContent = [
+      headers.join(","),
+      ...rows.map((row) => row.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(",")),
+    ].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `calloway_subscribers_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
   const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
   const [broadcastResult, setBroadcastResult] = useState<string | null>(null);
 
@@ -2129,21 +2171,77 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
       {/* Bulk Email Broadcast */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="email-broadcast">
-        <div>
-          <span className="text-xs font-semibold tracking-widest text-rose-700 uppercase block mb-1">
-            Customer Email List
-          </span>
-          <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-rose-600" />
-            Bulk Email Broadcast
-          </h2>
-          <p className="text-xs text-gray-500 font-light mt-1">
-            Sends a message to everyone who's signed up for a coupon code on your site.{" "}
-            {subscriberCount !== null && (
-              <span className="font-semibold text-gray-700">Currently {subscriberCount} subscriber(s).</span>
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+          <div>
+            <span className="text-xs font-semibold tracking-widest text-rose-700 uppercase block mb-1">
+              Customer Email List
+            </span>
+            <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-rose-600" />
+              Bulk Email Broadcast
+            </h2>
+            <p className="text-xs text-gray-500 font-light mt-1">
+              Sends a message to everyone who's signed up for a coupon code on your site.{" "}
+              {subscriberCount !== null && (
+                <span className="font-semibold text-gray-700">Currently {subscriberCount} subscriber(s).</span>
+              )}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleToggleSubscriberList}
+              className="px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold uppercase tracking-wider text-gray-700 hover:bg-gray-50 transition shadow-sm cursor-pointer"
+            >
+              {showSubscriberList ? "Hide Subscribers" : "View Subscribers"}
+            </button>
+            {showSubscriberList && subscriberList.length > 0 && (
+              <button
+                type="button"
+                onClick={downloadSubscribersCsv}
+                className="flex items-center gap-2 px-4 py-2.5 bg-amber-950 text-white hover:bg-amber-900 transition rounded-xl text-xs font-semibold uppercase tracking-wider shadow-sm cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5 text-amber-300" />
+                Export CSV
+              </button>
             )}
-          </p>
+          </div>
         </div>
+
+        {showSubscriberList && (
+          isLoadingSubscribers ? (
+            <div className="h-20 flex items-center justify-center">
+              <div className="w-6 h-6 border-2 border-amber-900 border-t-transparent rounded-full animate-spin"></div>
+            </div>
+          ) : subscriberList.length === 0 ? (
+            <div className="py-8 text-center border border-dashed border-gray-200 rounded-xl bg-gray-50/50">
+              <p className="text-sm text-gray-500">No subscribers yet.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto max-h-72 border border-gray-200 rounded-xl">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-100 text-[10px] uppercase font-bold text-slate-400 tracking-wider sticky top-0">
+                    <th className="py-2.5 px-4">Email</th>
+                    <th className="py-2.5 px-4">Coupon Code</th>
+                    <th className="py-2.5 px-4">Signed Up</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {subscriberList.map((s, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/50">
+                      <td className="py-2 px-4 text-slate-700">{s.email}</td>
+                      <td className="py-2 px-4 font-mono text-slate-500">{s.coupon_code}</td>
+                      <td className="py-2 px-4 text-slate-500">
+                        {new Date(s.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        )}
 
         {broadcastResult && (
           <div className={`p-4 rounded-xl text-xs font-medium flex items-center gap-3 border ${
