@@ -162,17 +162,50 @@ function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number):
 
 async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
   try {
+    // Higher zoom (18 vs the previous 14) asks OpenStreetMap for a much
+    // finer-grained match — the previous setting was roughly "city
+    // district" level, which is often simply unavailable for many US
+    // cities outside dense urban cores, causing it to fall all the way
+    // back to just the city name. This also checks several more OSM
+    // address field names, since which ones actually contain data varies
+    // by region.
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=14`,
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=18`,
       { headers: { "User-Agent": "CallowayMarketWebsite/1.0 (contact: callowaymarket2816@gmail.com)" } }
     );
     if (!res.ok) return null;
     const data = await res.json();
     const addr = data.address || {};
-    return addr.suburb || addr.neighbourhood || addr.city_district || addr.city || addr.town || addr.village || null;
+    return (
+      addr.neighbourhood ||
+      addr.suburb ||
+      addr.quarter ||
+      addr.residential ||
+      addr.city_district ||
+      addr.hamlet ||
+      addr.road ||
+      addr.city ||
+      addr.town ||
+      addr.village ||
+      null
+    );
   } catch {
     return null;
   }
+}
+
+// When reverse geocoding can only return the whole city name (no named
+// neighborhood/street data available for that spot), this adds a real,
+// still-useful bit of precision: which direction and roughly how far
+// from your store, instead of just a flat, unhelpfully broad city name.
+function compassDirection(storeLat: number, storeLng: number, lat: number, lng: number): string {
+  const dLat = lat - storeLat;
+  const dLng = lng - storeLng;
+  const angle = (Math.atan2(dLng, dLat) * 180) / Math.PI;
+  const normalized = (angle + 360) % 360;
+  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  const index = Math.round(normalized / 45) % 8;
+  return directions[index];
 }
 
 async function geolocateIp(ip: string): Promise<{ lat: number; lng: number; city: string } | null> {
@@ -1069,7 +1102,17 @@ app.post("/api/searches", async (req, res) => {
       distanceMiles = haversineMiles(STORE_LAT, STORE_LNG, lat, lng);
       if (typeof latitude === "number" && typeof longitude === "number") {
         const place = await reverseGeocode(lat, lng);
-        if (place) neighborhood = place;
+        if (place) {
+          // If all we got back is just the plain city name (no named
+          // neighborhood/street data was available for that exact spot),
+          // add a direction + distance so it's still more useful than a
+          // flat, unhelpfully broad "Bakersfield" for every single result.
+          const direction = compassDirection(STORE_LAT, STORE_LNG, lat, lng);
+          neighborhood =
+            place.toLowerCase() === "bakersfield"
+              ? `Bakersfield (${direction}, ${distanceMiles}mi)`
+              : place;
+        }
       }
     }
   } catch (err) {
