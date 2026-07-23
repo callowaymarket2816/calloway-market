@@ -1352,6 +1352,23 @@ app.post("/api/email-signup", async (req, res) => {
 
 // Lets the dashboard show "this will send to X subscribers" before the
 // merchant actually commits to sending a broadcast to real customers.
+// Returns the actual subscriber list (email, signup date, coupon code) —
+// merchant-only, since this is real customer contact information.
+app.get("/api/email-signup/list", requireMerchantAuth, async (req, res) => {
+  if (!supabase) return res.json({ subscribers: [] });
+  try {
+    const { data, error } = await supabase
+      .from("email_signups")
+      .select("email, coupon_code, created_at")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    res.json({ subscribers: data || [] });
+  } catch (err: any) {
+    console.error("Failed to load subscriber list:", err);
+    res.status(500).json({ error: err.message || "Failed to load subscribers." });
+  }
+});
+
 app.get("/api/email-signup/count", requireMerchantAuth, async (req, res) => {
   if (!supabase) return res.json({ count: 0 });
   try {
