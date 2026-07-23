@@ -1932,13 +1932,37 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 <MapPin className="w-5 h-5 text-gray-400" />
                 <div>
                   <h3 className="font-serif text-lg text-gray-900">Neighborhood Search Hotspots</h3>
-                  <p className="text-xs text-gray-400 font-light mt-0.5">Not connected yet — this needs a real location data source.</p>
+                  <p className="text-xs text-gray-400 font-light mt-0.5">
+                    Real customer distance/neighborhood data, calculated from browser location when a customer allows
+                    it (never from Search Console, which can't report at neighborhood level).
+                  </p>
                 </div>
               </div>
-              <div className="h-40 flex flex-col items-center justify-center text-center text-gray-400 gap-2">
-                <p className="text-sm">No real location data is connected yet.</p>
-                <p className="text-xs max-w-sm">To see genuine geographic search trends, connect Google Search Console for your domain, or add real customer geolocation with their consent.</p>
-              </div>
+              {analytics && analytics.heatMapData.length > 0 ? (
+                <div className="space-y-2 pt-1">
+                  {analytics.heatMapData.map((spot) => (
+                    <div key={spot.neighborhood} className="flex items-center justify-between p-3 bg-gray-50/75 rounded-xl border border-gray-100">
+                      <div className="flex items-center gap-2">
+                        <MapPin className="w-3.5 h-3.5 text-amber-800 shrink-0" />
+                        <span className="text-sm font-semibold text-gray-800">{spot.neighborhood}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-gray-500 font-mono">
+                        <span>{spot.count} search{spot.count === 1 ? "" : "es"}</span>
+                        <span className="text-gray-300">•</span>
+                        <span>~{spot.averageDistance}mi away</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="h-40 flex flex-col items-center justify-center text-center text-gray-400 gap-2">
+                  <p className="text-sm">No neighborhood data yet.</p>
+                  <p className="text-xs max-w-sm">
+                    This fills in automatically as customers search your site and allow browser location access —
+                    nothing extra to set up.
+                  </p>
+                </div>
+              )}
             </div>
           ) : (
             <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs space-y-4">
