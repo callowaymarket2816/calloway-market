@@ -244,15 +244,14 @@ async function fetchGoogleSearchQueries(): Promise<{ query: string; clicks: numb
 // Google Cloud project (even though actual usage cost is $0 under the
 // free tier) and the service account granted "BigQuery Job User" +
 // "BigQuery Data Viewer" roles.
-async function fetchGoogleTrendsAlcoholTerms(): Promise<{ term: string; week: string; rank: number }[]> {
+async function fetchGoogleTrendsAlcoholTerms(): Promise<{ terms: { term: string; week: string; rank: number }[]; error?: string }> {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
   const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
   const dmaName = process.env.GOOGLE_TRENDS_DMA_NAME || "Bakersfield";
 
   if (!email || !key || !projectId) {
-    console.log("Google Trends BigQuery not configured (missing service account or project ID) — skipping.");
-    return [];
+    return { terms: [], error: "Missing GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_SERVICE_ACCOUNT_KEY, or GOOGLE_CLOUD_PROJECT_ID." };
   }
 
   try {
@@ -296,14 +295,21 @@ async function fetchGoogleTrendsAlcoholTerms(): Promise<{ term: string; week: st
     });
 
     const rows = response.data.rows || [];
-    return rows.map((row: any) => ({
-      term: row.f?.[0]?.v || "",
-      week: row.f?.[1]?.v || "",
-      rank: Number(row.f?.[2]?.v) || 0,
-    }));
-  } catch (err) {
+    return {
+      terms: rows.map((row: any) => ({
+        term: row.f?.[0]?.v || "",
+        week: row.f?.[1]?.v || "",
+        rank: Number(row.f?.[2]?.v) || 0,
+      })),
+    };
+  } catch (err: any) {
+    // Surfaces the REAL underlying error (e.g. "billing account required",
+    // permission denied, etc.) instead of silently returning an empty
+    // list — this is temporary/diagnostic so it can be seen directly in
+    // the API response without needing to dig through Vercel's logs.
+    const message = err?.errors?.[0]?.message || err?.message || String(err);
     console.error("Failed to fetch Google Trends BigQuery data:", err);
-    return [];
+    return { terms: [], error: message };
   }
 }
 
@@ -1230,13 +1236,16 @@ app.get("/api/trends/alcohol", async (req, res) => {
 async function runGoogleTrendsSync(): Promise<{ added: number; error?: string }> {
   if (!supabase) return { added: 0, error: "Database not configured." };
   try {
-    const terms = await fetchGoogleTrendsAlcoholTerms();
-    const value = { terms, lastSynced: new Date().toISOString() };
+    const result = await fetchGoogleTrendsAlcoholTerms();
+    if (result.error) {
+      return { added: 0, error: result.error };
+    }
+    const value = { terms: result.terms, lastSynced: new Date().toISOString() };
     const { error } = await supabase
       .from("site_settings")
       .upsert({ key: "google_trends_alcohol", value }, { onConflict: "key" });
     if (error) throw error;
-    return { added: terms.length };
+    return { added: result.terms.length };
   } catch (err: any) {
     console.error("Google Trends sync failed:", err);
     return { added: 0, error: err.message || "Sync failed." };
