@@ -1405,6 +1405,24 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
   const activeCategoriesTotal = activeCategories.reduce((acc, cat) => acc + cat.value, 0);
 
+  // "Alcohol Only" filter — applied to your REAL search data (customer
+  // site searches + Google Search Console referrals), unlike the Google
+  // Trends BigQuery feature which only has access to the top ~25 overall
+  // trending terms nationally/regionally. This works against your actual
+  // logged searches, so it's a real, usable signal.
+  const [alcoholOnlyFilter, setAlcoholOnlyFilter] = useState(false);
+  const ALCOHOL_KEYWORDS = [
+    "whiskey", "whisky", "bourbon", "scotch", "tequila", "mezcal", "vodka",
+    "gin", "rum", "brandy", "cognac", "liqueur", "beer", "wine", "champagne",
+    "liquor", "seltzer", "ipa", "lager", "ale", "cider",
+  ];
+  const isAlcoholRelated = (text: string, category?: string) => {
+    const lower = (text || "").toLowerCase();
+    if (ALCOHOL_KEYWORDS.some((kw) => lower.includes(kw))) return true;
+    const alcoholCategories = ["whiskey", "tequila", "vodka", "gin", "rum", "brandy", "liqueur", "liquor", "wine", "beer", "rtd"];
+    return category ? alcoholCategories.includes(category.toLowerCase()) : false;
+  };
+
   // Extracts real product-level buying intent from the search log: every
   // time a customer clicks "Add to Cart" or the Grubhub button on a
   // specific product, it gets logged as "DoorDash Redirect: <name>" or
@@ -1998,9 +2016,20 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           
           {/* Trending Searches list */}
           <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs space-y-4">
-            <div className="flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-emerald-700" />
-              <h3 className="font-serif text-lg text-gray-900">Trending Local Terms</h3>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-emerald-700" />
+                <h3 className="font-serif text-lg text-gray-900">Trending Local Terms</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAlcoholOnlyFilter((prev) => !prev)}
+                className={`text-[9px] font-bold uppercase px-2.5 py-1 rounded-full transition cursor-pointer ${
+                  alcoholOnlyFilter ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-500"
+                }`}
+              >
+                {alcoholOnlyFilter ? "Alcohol Only" : "All Products"}
+              </button>
             </div>
 
             {isLoadingAnalytics ? (
@@ -2009,9 +2038,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   <div key={i} className="h-8 bg-gray-50 rounded-lg animate-pulse" />
                 ))}
               </div>
-            ) : analytics && analytics.trendingQueries.length > 0 ? (
+            ) : analytics && analytics.trendingQueries.filter((t) => !alcoholOnlyFilter || isAlcoholRelated(t.text, t.category)).length > 0 ? (
               <div className="space-y-3">
-                {analytics.trendingQueries.map((trend, idx) => (
+                {analytics.trendingQueries.filter((t) => !alcoholOnlyFilter || isAlcoholRelated(t.text, t.category)).map((trend, idx) => (
                   <div key={idx} className="flex items-center justify-between p-3 bg-gray-50/75 rounded-xl border border-gray-100">
                     <div className="space-y-0.5">
                       <span className="text-sm font-semibold text-gray-800">{trend.text}</span>
@@ -2026,7 +2055,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               </div>
             ) : (
               <div className="py-8 text-center text-gray-400 text-sm font-light">
-                No organic searches registered yet today.
+                {alcoholOnlyFilter && analytics && analytics.trendingQueries.length > 0
+                  ? "No alcohol-related terms in the current data."
+                  : "No organic searches registered yet today."}
               </div>
             )}
           </div>
@@ -2073,9 +2104,20 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-serif text-lg text-gray-900">Live Search Stream</h3>
-              <span className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full animate-pulse border border-emerald-100">
-                <span className="w-1.5 h-1.5 bg-emerald-600 rounded-full"></span> Live Stream
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAlcoholOnlyFilter((prev) => !prev)}
+                  className={`text-[9px] font-bold uppercase px-2.5 py-1 rounded-full transition cursor-pointer ${
+                    alcoholOnlyFilter ? "bg-amber-950 text-white" : "bg-gray-100 text-gray-500"
+                  }`}
+                >
+                  {alcoholOnlyFilter ? "Alcohol Only" : "All Products"}
+                </button>
+                <span className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full animate-pulse border border-emerald-100">
+                  <span className="w-1.5 h-1.5 bg-emerald-600 rounded-full"></span> Live Stream
+                </span>
+              </div>
             </div>
 
             <div className="space-y-3 max-h-[340px] overflow-y-auto pr-2">
@@ -2087,11 +2129,13 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 </div>
               ) : analytics && analytics.recentSearches.length > 0 ? (
                 (() => {
-                  const filtered = analytics.recentSearches;
+                  const filtered = alcoholOnlyFilter
+                    ? analytics.recentSearches.filter((q) => isAlcoholRelated(q.query, q.category))
+                    : analytics.recentSearches;
                   if (filtered.length === 0) {
                     return (
                       <div className="py-12 text-center text-gray-400 text-xs font-light">
-                        No recent searches yet.
+                        {alcoholOnlyFilter ? "No alcohol-related searches in the current data." : "No recent searches yet."}
                       </div>
                     );
                   }
@@ -2778,6 +2822,18 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   placeholder="Scan or type barcode"
                   value={newUpc}
                   onChange={(e) => setNewUpc(e.target.value)}
+                  onKeyDown={(e) => {
+                    // A physical barcode scanner types the digits then
+                    // sends an Enter key — inside a <form>, that Enter
+                    // would normally submit the whole form immediately,
+                    // before the last bit of scanned text has actually
+                    // registered in state. Blocking Enter here specifically
+                    // means scanning just fills the field, same as typing;
+                    // the merchant still submits manually via the button.
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                    }
+                  }}
                   className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
                 />
               </div>
