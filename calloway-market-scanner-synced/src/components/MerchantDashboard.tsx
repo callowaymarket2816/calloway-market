@@ -1192,6 +1192,13 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     e.preventDefault();
     if (!newName.trim()) return;
 
+    if (existingUpcMatch) {
+      setUploadMessage(
+        `Can't add this — UPC ${newUpc} already belongs to "${existingUpcMatch.name}". Edit that product instead, or change the UPC.`
+      );
+      return;
+    }
+
     const parsedPrice = parseFloat(newPrice);
     const calculatedFinalPrice = !isNaN(parsedPrice)
       ? (newPriceIsFinal ? parsedPrice : Math.round(parsedPrice * (1 + uploadMarkupMargin / 100) * 100) / 100)
@@ -1695,6 +1702,17 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       setIsSendingBroadcast(false);
     }
   };
+
+  // Live duplicate check for Manual Bottle Entry's UPC field — the
+  // dedicated "Scan Barcode" button already checks for an existing match,
+  // but typing/scanning directly into this form's own UPC field never
+  // checked at all, meaning it was possible to accidentally create a
+  // duplicate product sharing a UPC that already belonged to something
+  // else. This surfaces that warning right in the form, before adding.
+  const existingUpcMatch =
+    newUpc.trim().length > 0
+      ? (products || []).find((p: any) => p.upc && normalizeUpc(p.upc) === normalizeUpc(newUpc))
+      : null;
 
   return (
     <div className="space-y-8" id="merchant-view">
@@ -2860,6 +2878,21 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   }}
                   className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
                 />
+                {existingUpcMatch && (
+                  <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-800 flex items-center justify-between gap-3">
+                    <span>
+                      ⚠️ This UPC already belongs to <span className="font-bold">"{existingUpcMatch.name}"</span> —
+                      adding it now will create a duplicate.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openEditModal(existingUpcMatch)}
+                      className="px-3 py-1.5 bg-amber-950 hover:bg-amber-900 text-white font-bold text-[10px] uppercase tracking-wider rounded-lg transition cursor-pointer shrink-0"
+                    >
+                      Edit That Product Instead
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div>
