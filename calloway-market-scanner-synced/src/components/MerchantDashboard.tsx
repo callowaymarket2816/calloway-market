@@ -612,7 +612,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const VODKA_BRANDS = ["smirnoff", "tito's", "titos", "grey goose", "absolut", "svedka", "ketel one", "stolichnaya", "stoli", "skyy", "pinnacle", "new amsterdam", "deep eddy", "belvedere", "ciroc"];
   const GIN_BRANDS = ["tanqueray", "bombay", "beefeater", "hendrick's", "hendricks", "gordon's", "gordons", "seagram's gin", "seagrams gin"];
   const RUM_BRANDS = ["bacardi", "captain morgan", "malibu", "myers", "mount gay", "kraken", "sailor jerry", "cruzan"];
-  const BRANDY_BRANDS = ["hennessy", "courvoisier", "remy martin", "martell", "e&j", "e & j", "christian brothers", "paul masson"];
+  const BRANDY_BRANDS = ["e&j", "e & j", "christian brothers", "paul masson", "korbel", "presidente"];
+  const COGNAC_BRANDS = ["hennessy", "courvoisier", "remy martin", "rémy martin", "martell", "camus", "hine"];
   const LIQUEUR_BRANDS = ["baileys", "bailey's", "kahlua", "grand marnier", "cointreau", "disaronno", "jagermeister", "jägermeister", "southern comfort", "amaretto", "triple sec", "chambord", "frangelico", "midori"];
 
   const guessSpiritTypeFromName = (name: string): string | null => {
@@ -622,7 +623,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     if (n.includes("vodka") || VODKA_BRANDS.some((b) => n.includes(b))) return "Vodka";
     if (n.includes(" gin ") || n.startsWith("gin ") || n.endsWith(" gin") || GIN_BRANDS.some((b) => n.includes(b))) return "Gin";
     if (n.includes("rum") || RUM_BRANDS.some((b) => n.includes(b))) return "Rum";
-    if (n.includes("brandy") || n.includes("cognac") || BRANDY_BRANDS.some((b) => n.includes(b))) return "Brandy";
+    // Cognac is checked before the generic Brandy check — it's technically
+    // a type of brandy, but merchants typically shelve/list it as its own
+    // category rather than folding it in, so it's kept distinct here.
+    if (n.includes("cognac") || COGNAC_BRANDS.some((b) => n.includes(b))) return "Cognac";
+    if (n.includes("brandy") || BRANDY_BRANDS.some((b) => n.includes(b))) return "Brandy";
     if (n.includes("liqueur") || n.includes("schnapps") || LIQUEUR_BRANDS.some((b) => n.includes(b))) return "Liqueur";
     return null;
   };
@@ -647,7 +652,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       cat = "Gin";
     } else if (catLower.includes("rum")) {
       cat = "Rum";
-    } else if (catLower.includes("brandy") || catLower.includes("cognac")) {
+    } else if (catLower.includes("cognac")) {
+      cat = "Cognac";
+    } else if (catLower.includes("brandy")) {
       cat = "Brandy";
     } else if (catLower.includes("liqueur")) {
       cat = "Liqueur";
@@ -1612,6 +1619,47 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
   const [isApplyingMatches, setIsApplyingMatches] = useState(false);
   const [showCandidateReview, setShowCandidateReview] = useState(false);
+
+  // Exact-name UPC reattachment — for when products already exist correctly
+  // (e.g. from a re-import) but are simply missing their UPC. Matches by
+  // exact (normalized) product name against a dropped backup/reference
+  // file and fills in ONLY the UPC on already-missing ones — nothing else
+  // about the product changes, and no new products are created.
+  const [isAttachingUpcs, setIsAttachingUpcs] = useState(false);
+  const handleAttachMissingUpcsFile = (file: File) => {
+    setUploadMessage(null);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        if (!text) throw new Error("File is empty.");
+        const raw = JSON.parse(text);
+        const items = Array.isArray(raw) ? raw : [raw];
+
+        setIsAttachingUpcs(true);
+        const res = await fetch("/api/products/attach-missing-upcs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+          body: JSON.stringify({ items }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          setUploadMessage(
+            `Repaired ${data.matched} missing UPC(s) and corrected ${data.categoryFixed} category label(s) by exact name match. Nothing else about any product was changed.`
+          );
+          logAction(`Repaired ${data.matched} UPCs and ${data.categoryFixed} categories from backup file by name match`);
+          onRefreshAllData();
+        } else {
+          setUploadMessage(data.error || "Failed to repair products.");
+        }
+      } catch (err: any) {
+        setUploadMessage(`Couldn't read that file: ${err.message || err}`);
+      } finally {
+        setIsAttachingUpcs(false);
+      }
+    };
+    reader.readAsText(file);
+  };
 
   const handleFindUpcCandidates = async () => {
     setIsLoadingCandidates(true);
@@ -3703,6 +3751,42 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             </table>
           </div>
         )}
+      </div>
+
+      {/* Exact-Name UPC Reattachment (from a backup/reference file) */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-4 my-12">
+        <div>
+          <span className="text-xs font-semibold tracking-widest text-emerald-700 uppercase block mb-1">
+            Barcode Coverage
+          </span>
+          <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
+            <Check className="w-5 h-5 text-emerald-700" />
+            Repair Missing UPCs &amp; Categories From a Backup File
+          </h2>
+          <p className="text-xs text-gray-500 font-light mt-1">
+            Drop a JSON file with product names, UPCs, and categories (like a previous restore/export file). Matches
+            by exact product name: fills in UPC only where currently missing, and corrects the category wherever it
+            differs from the backup (e.g. undoing "Fix Existing Categories" over-merging something like Cognac into
+            Brandy). Price, size, and everything else about every product stays exactly as it is right now. No new
+            products are created.
+          </p>
+        </div>
+        <label className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-200 hover:border-emerald-400 rounded-xl p-6 cursor-pointer transition text-xs text-gray-500 font-medium">
+          <Upload className="w-4 h-4 text-gray-400" />
+          {isAttachingUpcs ? "Matching and attaching UPCs..." : "Click or drop a .json backup file here"}
+          <input
+            type="file"
+            accept=".json"
+            className="hidden"
+            disabled={isAttachingUpcs}
+            onChange={(e) => {
+              if (e.target.files && e.target.files[0]) {
+                handleAttachMissingUpcsFile(e.target.files[0]);
+              }
+              e.target.value = "";
+            }}
+          />
+        </label>
       </div>
 
       {/* Fuzzy UPC Match Recovery */}
