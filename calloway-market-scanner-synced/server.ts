@@ -458,6 +458,76 @@ async function tryOpenProductsFacts(upc: string, productName: string): Promise<s
   }
 }
 
+// Looks up a brand-new UPC (one that doesn't exist in inventory yet) against
+// public product databases to prefill the Manual Bottle Entry form — name,
+// brand, size, category, and a candidate photo — so scanning a new item
+// doesn't mean typing all of that in by hand. Unlike namesLikelyMatch()
+// above (which verifies a photo against an EXISTING product's name), there
+// is no name to verify against here since the product doesn't exist yet —
+// whatever the database returns for a genuinely new UPC is simply the best
+// available info, marked for a quick photo review rather than blind trust.
+type NewProductLookupResult = {
+  name?: string;
+  brand?: string;
+  size?: string;
+  category?: string;
+  imageUrl?: string;
+} | null;
+
+async function lookupNewProductByUpc(upc: string): Promise<NewProductLookupResult> {
+  // UPCItemDB has the most structured data (title, brand, size, category)
+  // so it's tried first.
+  try {
+    const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${upc}`);
+    if (res.ok) {
+      const data = await res.json();
+      const item = data.items?.[0];
+      if (item && (item.title || item.brand)) {
+        return {
+          name: item.title || undefined,
+          brand: item.brand || undefined,
+          size: item.size || undefined,
+          category: item.category || undefined,
+          imageUrl: Array.isArray(item.images) && item.images.length > 0 ? item.images[0] : undefined,
+        };
+      }
+    }
+  } catch (err) {
+    console.error(`UPCitemdb new-product lookup failed for ${upc}:`, err);
+  }
+
+  // Fall back to Open Food Facts, then Open Products Facts.
+  const openDbLookup = async (host: string): Promise<NewProductLookupResult> => {
+    try {
+      const res = await fetch(
+        `https://${host}/api/v2/product/${upc}.json?fields=product_name,brands,quantity,categories,image_url,image_front_url`,
+        { headers: { "User-Agent": "CallowayMarketWebsite/1.0 (contact: callowaymarket2816@gmail.com)" } }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data.status === 0 || !data.product || !data.product.product_name) return null;
+      return {
+        name: data.product.product_name || undefined,
+        brand: data.product.brands || undefined,
+        size: data.product.quantity || undefined,
+        category: data.product.categories ? String(data.product.categories).split(",")[0].trim() : undefined,
+        imageUrl: data.product.image_front_url || data.product.image_url || undefined,
+      };
+    } catch (err) {
+      console.error(`${host} new-product lookup failed for ${upc}:`, err);
+      return null;
+    }
+  };
+
+  const fromOFF = await openDbLookup("world.openfoodfacts.org");
+  if (fromOFF) return fromOFF;
+
+  const fromOPF = await openDbLookup("world.openproductsfacts.org");
+  if (fromOPF) return fromOPF;
+
+  return null;
+}
+
 async function lookupProductImageByUpc(upc: string, productName: string): Promise<ImageLookupResult> {
   const fromUpcItemDb = await tryUpcItemDb(upc);
   if (fromUpcItemDb) return { url: fromUpcItemDb, source: "upcitemdb" };
@@ -553,6 +623,27 @@ app.get("/api/products", async (req, res) => {
   res.json(currentProducts);
 });
 
+// Called right when a merchant scans a UPC that has no existing product
+// match — looks the code up against public product databases so the
+// Manual Bottle Entry form can be prefilled (name, size, category, a
+// candidate photo) instead of the merchant typing everything by hand.
+app.get("/api/products/upc-lookup/:upc", requireMerchantAuth, async (req, res) => {
+  try {
+    const { upc } = req.params;
+    if (!upc || !/^\d{6,14}$/.test(upc)) {
+      return res.status(400).json({ error: "Invalid UPC." });
+    }
+    const info = await lookupNewProductByUpc(upc);
+    if (!info) {
+      return res.json({ found: false });
+    }
+    res.json({ found: true, ...info });
+  } catch (err: any) {
+    console.error("UPC prefill lookup failed:", err);
+    res.status(500).json({ error: err.message || "Lookup failed." });
+  }
+});
+
 app.post("/api/products", requireMerchantAuth, async (req, res) => {
   const { products } = req.body;
   
@@ -580,6 +671,13 @@ app.post("/api/products", requireMerchantAuth, async (req, res) => {
       price: p.price ? Number(p.price) : undefined,
       marginPercent: p.marginPercent ? Number(p.marginPercent) : undefined,
       upc: p.upc || undefined,
+      imageUrl: p.imageUrl || undefined,
+      // A photo carried over from the scan-to-add prefill lookup is from
+      // an unverified public database, same as the photo-lookup cron —
+      // flagged for the same quick review workflow rather than trusted
+      // outright.
+      imageNeedsReview: p.imageUrl ? true : false,
+      imageLookupAttempted: p.imageUrl ? true : false,
       updatedAt: new Date().toISOString(),
     };
   });
