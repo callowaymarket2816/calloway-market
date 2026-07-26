@@ -481,6 +481,19 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     if (!window.confirm("Are you absolutely sure you want to delete ALL inventory? This action is irreversible and will empty the customer showroom catalog.")) {
       return;
     }
+
+    // Extra safety gate specifically for this one irreversible, whole-catalog
+    // action — re-typing the merchant password confirms this is really the
+    // merchant doing it on purpose (e.g. not someone who wandered onto an
+    // already-logged-in screen), not just a second click-through of a popup.
+    const reenteredKey = window.prompt("To confirm, please re-enter your merchant password to permanently delete ALL inventory:");
+    if (reenteredKey === null) {
+      return;
+    }
+    if (reenteredKey !== merchantKey) {
+      setUploadMessage("Incorrect password — inventory was NOT deleted.");
+      return;
+    }
     
     setIsDeletingAll(true);
     try {
@@ -782,7 +795,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     };
 
     const firstRowCells = parseCSVLine(lines[0], delimiter);
-    const headerKeywords = ["name", "product", "spirit", "bottle", "category", "abv", "alcohol", "size", "volume", "stock", "status", "origin", "distillery", "notes", "tasting", "description", "price", "cost", "msrp", "wholesale", "value", "rate", "usd"];
+    const headerKeywords = ["name", "product", "spirit", "bottle", "category", "abv", "alcohol", "size", "volume", "stock", "status", "origin", "distillery", "notes", "tasting", "description", "price", "cost", "msrp", "wholesale", "value", "rate", "usd", "upc", "barcode", "ean", "gtin"];
     
     const hasHeader = firstRowCells.some(cell => {
       const val = cell.toLowerCase().trim();
@@ -831,6 +844,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             p.description = val;
           } else if (header.includes("pair")) {
             p.foodPairing = val;
+          } else if (header.includes("upc") || header.includes("barcode") || header === "ean" || header === "gtin") {
+            p.upc = val;
           } else if (header.includes("price") || header.includes("cost") || header.includes("msrp") || header.includes("wholesale") || header.includes("value") || header === "rate" || header === "usd") {
             p.rawPrice = val;
           }
@@ -886,7 +901,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           imageColor: "from-indigo-950 to-slate-900",
           iconName: "Package",
           price: calculatedFinalPrice,
-          marginPercent: uploadMarkupMargin
+          marginPercent: uploadMarkupMargin,
+          upc: p.upc || undefined
         });
       }
     }
@@ -1031,10 +1047,19 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             tastingNotes: Array.isArray(item.tastingNotes) 
               ? item.tastingNotes 
               : (item.tastingNotes ? String(item.tastingNotes).split(",").map((t: string) => t.trim()) : []),
-            description: item.description || item.Description || "Luxury reserve bottle added to showcase catalog.",
-            foodPairing: item.foodPairing || item.FoodPairing || "Assorted light bites",
+            description: item.description || item.Description || "",
+            foodPairing: item.foodPairing || item.FoodPairing || "",
             imageColor: "from-indigo-950 to-slate-900",
-            iconName: "Wine"
+            iconName: "Wine",
+            // UPC and price previously weren't carried over from JSON
+            // imports at all — silently dropped. Price here is used
+            // exactly as given (no markup applied), since a JSON import
+            // is treated as already-final data (e.g. a restore file),
+            // unlike CSV's raw-cost-plus-markup convention below.
+            upc: item.upc || item.UPC || item.Upc || item.barcode || item.Barcode || undefined,
+            price: (item.price ?? item.Price ?? item.sellingPrice ?? item["Selling Price"]) !== undefined
+              ? Number(item.price ?? item.Price ?? item.sellingPrice ?? item["Selling Price"])
+              : undefined,
           }));
         } else {
           parsed = parseCSV(text);
