@@ -882,7 +882,9 @@ app.post("/api/products/recategorize", requireMerchantAuth, async (req, res) => 
       cat = "Gin";
     } else if (catLower.includes("rum")) {
       cat = "Rum";
-    } else if (catLower.includes("brandy") || catLower.includes("cognac")) {
+    } else if (catLower.includes("cognac")) {
+      cat = "Cognac";
+    } else if (catLower.includes("brandy")) {
       cat = "Brandy";
     } else if (catLower.includes("liqueur")) {
       cat = "Liqueur";
@@ -932,6 +934,66 @@ app.post("/api/products/recategorize", requireMerchantAuth, async (req, res) => 
   } catch (err: any) {
     console.error("Recategorize failed:", err);
     res.status(500).json({ error: err.message || "Recategorize failed." });
+  }
+});
+
+// Surgical repair tool: reattaches UPCs AND restores correct categories to
+// EXISTING products by matching on product name against a backup/reference
+// list. Used both when a UPC came up empty after an import, and when
+// "Fix Existing Categories" over-collapsed a specific category (e.g.
+// Cognac merged into Brandy) — since that action overwrites the category
+// text itself, simply re-running normalization can't undo it; only a
+// trusted backup with the original category text can. UPC is only filled
+// in where currently missing; category is corrected whenever the backup's
+// value differs from what's currently stored. Nothing else about any
+// product changes, and no new products are created here.
+app.post("/api/products/attach-missing-upcs", requireMerchantAuth, async (req, res) => {
+  try {
+    const { items } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "No name/UPC list provided." });
+    }
+
+    const normalize = (str: string) =>
+      String(str || "")
+        .trim()
+        .toUpperCase()
+        .replace(/[.,'"!?]/g, "")
+        .replace(/\s+/g, " ");
+
+    const backupByName = new Map<string, { upc?: string; category?: string }>();
+    for (const item of items) {
+      const name = item.name || item.Name;
+      if (!name) continue;
+      backupByName.set(normalize(name), {
+        upc: item.upc || item.UPC || undefined,
+        category: item.category || item.Category || undefined,
+      });
+    }
+
+    // Always load a fresh snapshot immediately before writing, same
+    // single-read-single-write safety pattern used by recategorize/sync-upc.
+    const freshProducts = await loadProductsFromDisk();
+    let upcMatched = 0;
+    let categoryFixed = 0;
+    for (const product of freshProducts) {
+      const backup = backupByName.get(normalize(product.name));
+      if (!backup) continue;
+      if (!(product as any).upc && backup.upc) {
+        (product as any).upc = backup.upc;
+        upcMatched++;
+      }
+      if (backup.category && backup.category !== product.category) {
+        product.category = backup.category;
+        categoryFixed++;
+      }
+    }
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, matched: upcMatched, categoryFixed, total: freshProducts.length });
+  } catch (err: any) {
+    console.error("Attach missing UPCs / restore categories failed:", err);
+    res.status(500).json({ error: err.message || "Failed to repair products." });
   }
 });
 
