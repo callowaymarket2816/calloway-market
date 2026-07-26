@@ -128,6 +128,12 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [newPrice, setNewPrice] = useState("");
   const [newPriceIsFinal, setNewPriceIsFinal] = useState(false);
   const [newUpc, setNewUpc] = useState("");
+  // Populated when scanning a brand-new UPC successfully prefills a
+  // candidate photo from a public product database — shown as a preview
+  // in Manual Bottle Entry and saved along with the product (flagged for
+  // the same photo review workflow as the automatic photo-lookup cron).
+  const [newImageUrl, setNewImageUrl] = useState("");
+  const [isLookingUpNewUpc, setIsLookingUpNewUpc] = useState(false);
 
   // Bulk Paste State
   const [bulkText, setBulkText] = useState("");
@@ -210,6 +216,34 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
+  // Confirms a photo that came from an automatic lookup (either the photo
+  // cron or the scan-to-add prefill) is actually correct — just clears the
+  // review flag, no confirmation dialog needed since nothing destructive
+  // happens.
+  const [isApprovingPhotoId, setIsApprovingPhotoId] = useState<string | null>(null);
+  const handleApprovePhoto = async (id: string, name: string) => {
+    setIsApprovingPhotoId(id);
+    try {
+      const res = await fetch(`/api/products/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ imageNeedsReview: false }),
+      });
+      if (res.ok) {
+        setUploadMessage(`Photo confirmed for "${name}".`);
+        logAction(`Approved photo for "${name}"`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to confirm photo.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error confirming photo: ${err.message || err}`);
+    } finally {
+      setIsApprovingPhotoId(null);
+    }
+  };
+
   const [isClearingPhotoId, setIsClearingPhotoId] = useState<string | null>(null);
   const handleClearPhoto = async (id: string, name: string) => {
     if (!window.confirm(`Remove the current photo for "${name}"? This only clears the image — nothing else about the product changes.`)) {
@@ -271,7 +305,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // scanned "0888109050047" needs to still match a stored "888109050047".
   const normalizeUpc = (code: string) => String(code).replace(/^0+/, "");
 
-  const handleBarcodeDetected = (upc: string) => {
+  const handleBarcodeDetected = async (upc: string) => {
     setIsScannerOpen(false);
     const normalizedScanned = normalizeUpc(upc);
     const match = products.find(
@@ -280,11 +314,40 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     if (match) {
       setUploadMessage(`Found existing product for UPC ${upc}: "${match.name}". Opening its edit form.`);
       openEditModal(match);
-    } else {
-      setUploadTab("manual");
-      setNewUpc(upc);
-      setUploadMessage(`No existing product found for UPC ${upc}. Fill in the details below to add it as new.`);
-      logAction(`Scanned new UPC not yet in inventory: ${upc}`);
+      return;
+    }
+
+    setUploadTab("manual");
+    setNewUpc(upc);
+    setNewName("");
+    setNewImageUrl("");
+    setUploadMessage(`No existing product found for UPC ${upc}. Looking up its details automatically...`);
+    logAction(`Scanned new UPC not yet in inventory: ${upc}`);
+
+    // A brand-new UPC gets looked up against public product databases so
+    // the form below fills itself in (name, size, category, a candidate
+    // photo) instead of the merchant typing it all in by hand.
+    setIsLookingUpNewUpc(true);
+    try {
+      const res = await fetch(`/api/products/upc-lookup/${encodeURIComponent(upc)}`, {
+        headers: { "X-Merchant-Key": merchantKey },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.found) {
+        if (data.name) setNewName(data.brand && !data.name.toLowerCase().includes(data.brand.toLowerCase()) ? `${data.brand} ${data.name}` : data.name);
+        if (data.size) setNewSize(data.size);
+        if (data.category) setNewCategory(data.category);
+        if (data.imageUrl) setNewImageUrl(data.imageUrl);
+        setUploadMessage(
+          `Prefilled details for UPC ${upc} from a public product database — double-check everything below (especially the photo) before adding it.`
+        );
+      } else {
+        setUploadMessage(`No existing product found for UPC ${upc}, and no outside details were found either. Fill in the details below to add it as new.`);
+      }
+    } catch (err: any) {
+      setUploadMessage(`No existing product found for UPC ${upc}. Couldn't reach the lookup service (${err.message || err}) — fill in the details below manually.`);
+    } finally {
+      setIsLookingUpNewUpc(false);
     }
   };
   const [promos, setPromos] = useState<PromoBanner[]>([]);
@@ -1219,6 +1282,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       price: calculatedFinalPrice,
       marginPercent: uploadMarkupMargin,
       upc: newUpc || undefined,
+      imageUrl: newImageUrl || undefined,
     };
 
     if (autoPublish) {
@@ -1248,6 +1312,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         setNewFoodPairing("");
         setNewPrice("");
         setNewUpc("");
+        setNewImageUrl("");
         setPendingManualProduct(null);
         onRefreshAllData();
       } else {
@@ -2893,6 +2958,29 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                     </button>
                   </div>
                 )}
+                {isLookingUpNewUpc && (
+                  <div className="mt-2 flex items-center gap-2 text-[11px] text-gray-500">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    Looking up this UPC to prefill name, size, category, and a photo...
+                  </div>
+                )}
+                {newImageUrl && !isLookingUpNewUpc && (
+                  <div className="mt-2 p-3 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-lg border border-indigo-200 bg-white flex items-center justify-center overflow-hidden shrink-0">
+                      <img src={newImageUrl} alt="Prefilled candidate" className="w-full h-full object-contain" />
+                    </div>
+                    <span className="text-[11px] text-indigo-800 flex-1">
+                      Candidate photo pulled in automatically — double-check it's actually this product before adding.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setNewImageUrl("")}
+                      className="px-3 py-1.5 bg-white border border-indigo-300 hover:bg-indigo-100 text-indigo-800 font-bold text-[10px] uppercase tracking-wider rounded-lg transition cursor-pointer shrink-0"
+                    >
+                      Wrong Photo — Remove
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -3896,7 +3984,28 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                           >
                             <Pencil className="w-3.5 h-3.5" />
                           </button>
-                          {(product as any).imageUrl && (
+                          {(product as any).imageUrl && (product as any).imageNeedsReview ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleApprovePhoto(product.id, product.name)}
+                                disabled={isApprovingPhotoId === product.id}
+                                className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition disabled:text-gray-200 cursor-pointer inline-flex items-center mr-1"
+                                title="Keep this photo — it's correct"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleClearPhoto(product.id, product.name)}
+                                disabled={isClearingPhotoId === product.id}
+                                className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition disabled:text-gray-200 cursor-pointer inline-flex items-center mr-1"
+                                title="Wrong photo — remove it"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          ) : (product as any).imageUrl && (
                             <button
                               type="button"
                               onClick={() => handleClearPhoto(product.id, product.name)}
