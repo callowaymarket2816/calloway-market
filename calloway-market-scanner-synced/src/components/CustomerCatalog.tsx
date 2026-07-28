@@ -149,6 +149,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
   }, 0);
 
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
   // Builds a clean, readable URL for a product: /product/{id}/{slug} — the
   // id is what's actually used to look the product up (reliable even if
@@ -265,7 +266,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     }
   };
 
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isInquiring, setIsInquiring] = useState(false);
   const [inquiryName, setInquiryName] = useState("");
   const [inquiryContact, setInquiryContact] = useState("");
