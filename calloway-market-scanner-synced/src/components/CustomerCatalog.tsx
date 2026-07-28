@@ -150,22 +150,66 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
 
   const [isCartOpen, setIsCartOpen] = useState(false);
 
+  // Builds a clean, readable URL for a product: /product/{id}/{slug} — the
+  // id is what's actually used to look the product up (reliable even if
+  // the name changes later); the slug is just for readability/SEO and is
+  // ignored on load.
+  const slugify = (str: string) =>
+    String(str || "")
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
+  const buildProductUrl = (product: Product) =>
+    `${window.location.origin}/product/${product.id}/${slugify(product.name)}`;
+
   // Per-product deep link — opens straight to a product's detail view when
-  // the site is loaded with ?product=<id> in the URL, e.g. for sharing a
-  // single item via text or social media.
+  // the site is loaded at /product/{id}/{slug}, e.g. for sharing a single
+  // item via text or social media. Also supports the older ?product=<id>
+  // query-string form so any links shared before this existed keep working.
   useEffect(() => {
     if (products.length === 0) return;
-    const params = new URLSearchParams(window.location.search);
-    const productId = params.get("product");
+    const pathMatch = window.location.pathname.match(/^\/product\/([^/]+)/);
+    const productId = pathMatch ? pathMatch[1] : new URLSearchParams(window.location.search).get("product");
     if (productId) {
       const match = products.find((p) => p.id === productId);
       if (match) setSelectedProduct(match);
     }
   }, [products]);
 
+  // Keeps the address bar in sync with whichever product is open, without
+  // a full page reload — so copying straight from the URL bar gives the
+  // same clean link as the Share button, and the browser back button
+  // closes the product view.
+  useEffect(() => {
+    if (selectedProduct) {
+      const cleanUrl = `/product/${selectedProduct.id}/${slugify(selectedProduct.name)}`;
+      if (window.location.pathname !== cleanUrl) {
+        window.history.pushState({ productId: selectedProduct.id }, "", cleanUrl);
+      }
+    } else if (window.location.pathname.startsWith("/product/")) {
+      window.history.pushState({}, "", "/");
+    }
+  }, [selectedProduct]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const pathMatch = window.location.pathname.match(/^\/product\/([^/]+)/);
+      if (pathMatch) {
+        const match = products.find((p) => p.id === pathMatch[1]);
+        setSelectedProduct(match || null);
+      } else {
+        setSelectedProduct(null);
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [products]);
+
   const [shareCopied, setShareCopied] = useState(false);
   const handleShareProduct = (product: Product) => {
-    const url = `${window.location.origin}${window.location.pathname}?product=${product.id}`;
+    const url = buildProductUrl(product);
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(url).then(() => {
         setShareCopied(true);
