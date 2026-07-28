@@ -87,6 +87,93 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
   const [searchTerm, setSearchTerm] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // Real shopping cart — lets a customer add several products before
+  // heading to checkout, instead of the old flow which immediately opened
+  // the DoorDash/Grubhub picker for a single item. Persisted to
+  // localStorage so it survives a page refresh (this is the live site
+  // running in a real browser, not a sandboxed preview, so localStorage is
+  // fine here).
+  const [cart, setCart] = useState<Record<string, number>>({});
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("callowayCart");
+      if (saved) setCart(JSON.parse(saved));
+    } catch {
+      // ignore corrupt/unavailable storage
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("callowayCart", JSON.stringify(cart));
+    } catch {
+      // ignore storage write failures (e.g. private browsing)
+    }
+  }, [cart]);
+
+  const [cartToast, setCartToast] = useState<string | null>(null);
+  const addToCart = (product: Product, qty: number = 1) => {
+    setCart((prev) => ({ ...prev, [product.id]: (prev[product.id] || 0) + qty }));
+    setCartToast(`Added "${product.name}" to your cart`);
+    window.clearTimeout((addToCart as any)._t);
+    (addToCart as any)._t = window.setTimeout(() => setCartToast(null), 2200);
+  };
+  const updateCartQty = (productId: string, qty: number) => {
+    setCart((prev) => {
+      if (qty <= 0) {
+        const next = { ...prev };
+        delete next[productId];
+        return next;
+      }
+      return { ...prev, [productId]: qty };
+    });
+  };
+  const removeFromCart = (productId: string) => {
+    setCart((prev) => {
+      const next = { ...prev };
+      delete next[productId];
+      return next;
+    });
+  };
+  const clearCart = () => setCart({});
+
+  const cartItemCount = Object.values(cart).reduce((sum, q) => sum + q, 0);
+  const cartLineItems = Object.entries(cart)
+    .map(([productId, qty]) => {
+      const product = products.find((p) => p.id === productId);
+      return product ? { product, qty } : null;
+    })
+    .filter((x): x is { product: Product; qty: number } => x !== null);
+  const cartSubtotal = cartLineItems.reduce((sum, { product, qty }) => {
+    const price = (product as any).storePrice ?? product.price ?? 0;
+    return sum + price * qty;
+  }, 0);
+
+  const [isCartOpen, setIsCartOpen] = useState(false);
+
+  // Per-product deep link — opens straight to a product's detail view when
+  // the site is loaded with ?product=<id> in the URL, e.g. for sharing a
+  // single item via text or social media.
+  useEffect(() => {
+    if (products.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const productId = params.get("product");
+    if (productId) {
+      const match = products.find((p) => p.id === productId);
+      if (match) setSelectedProduct(match);
+    }
+  }, [products]);
+
+  const [shareCopied, setShareCopied] = useState(false);
+  const handleShareProduct = (product: Product) => {
+    const url = `${window.location.origin}${window.location.pathname}?product=${product.id}`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(() => {
+        setShareCopied(true);
+        setTimeout(() => setShareCopied(false), 2000);
+      }).catch(() => {});
+    }
+  };
+
   const [showScrollTop, setShowScrollTop] = useState(false);
   useEffect(() => {
     const handleScroll = () => setShowScrollTop(window.scrollY > 500);
@@ -104,21 +191,21 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
       .catch(() => {});
   }, []);
 
-  const [signupEmail, setSignupEmail] = useState("");
+  const [signupPhone, setSignupPhone] = useState("");
   const [signupStatus, setSignupStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [signupCouponCode, setSignupCouponCode] = useState("");
   const [signupErrorMsg, setSignupErrorMsg] = useState("");
 
-  const handleEmailSignup = async (e: React.FormEvent) => {
+  const handleSmsSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!signupEmail.trim()) return;
+    if (!signupPhone.trim()) return;
     setSignupStatus("loading");
     setSignupErrorMsg("");
     try {
-      const res = await fetch("/api/email-signup", {
+      const res = await fetch("/api/sms-signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: signupEmail.trim() }),
+        body: JSON.stringify({ phone: signupPhone.trim() }),
       });
       const data = await res.json();
       if (res.ok && data.couponCode) {
@@ -173,6 +260,50 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
       window.open(service === "doordash" ? getDoorDashUrl() : getGrubhubUrl(), "_blank");
     }
     closeOrderSheet();
+  };
+
+  // Cart checkout — separate from the single-item quick-order sheet above.
+  // Walks through: pick a delivery service -> see the price disclaimer ->
+  // get a copyable order list, since DoorDash/Grubhub don't offer any way
+  // for an outside site to push cart contents into their own cart.
+  const [showCartCheckout, setShowCartCheckout] = useState(false);
+  const [cartCheckoutStep, setCartCheckoutStep] = useState<"choose" | "list">("choose");
+  const [cartCheckoutService, setCartCheckoutService] = useState<"doordash" | "grubhub" | null>(null);
+  const [orderListCopied, setOrderListCopied] = useState(false);
+
+  const openCartCheckout = () => {
+    setIsCartOpen(false);
+    setCartCheckoutStep("choose");
+    setCartCheckoutService(null);
+    setShowCartCheckout(true);
+  };
+  const closeCartCheckout = () => {
+    setShowCartCheckout(false);
+    setCartCheckoutStep("choose");
+    setCartCheckoutService(null);
+  };
+  const chooseCartCheckoutService = (service: "doordash" | "grubhub") => {
+    setCartCheckoutService(service);
+    setCartCheckoutStep("list");
+    onSearchLog(`${service === "doordash" ? "DoorDash" : "Grubhub"} Redirect: Cart Checkout (${cartItemCount} items)`, "Order");
+  };
+  const buildOrderListText = () => {
+    const lines = cartLineItems.map(({ product, qty }) => `${qty} x ${product.name}`);
+    return lines.join("\n");
+  };
+  const handleCopyOrderList = () => {
+    const text = buildOrderListText();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        setOrderListCopied(true);
+        setTimeout(() => setOrderListCopied(false), 2000);
+      }).catch(() => {});
+    }
+  };
+  const handleGoToDeliveryService = () => {
+    if (!cartCheckoutService) return;
+    triggerSearchFetch();
+    window.open(cartCheckoutService === "doordash" ? getDoorDashUrl() : getGrubhubUrl(), "_blank");
   };
 
   // Store Info — replaces the previous non-functional "Account" tab, since
@@ -318,7 +449,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setOrderSheetProduct(product);
+              addToCart(product);
             }}
             className="w-full py-2.5 bg-[#E4002B] hover:bg-[#c40025] text-white text-sm font-bold rounded-full transition cursor-pointer"
           >
@@ -542,16 +673,16 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                   </p>
                 </div>
               ) : (
-                <form onSubmit={handleEmailSignup} className="space-y-3">
+                <form onSubmit={handleSmsSignup} className="space-y-3">
                   <h2 className="text-xl font-extrabold leading-snug">Get 10% Off<br/>Your Next Visit</h2>
-                  <p className="text-white/60 text-xs">Enter your email for an instant coupon code.</p>
+                  <p className="text-white/60 text-xs">Enter your phone number for an instant coupon code by text.</p>
                   <div className="flex gap-2">
                     <input
-                      type="email"
+                      type="tel"
                       required
-                      placeholder="you@email.com"
-                      value={signupEmail}
-                      onChange={(e) => setSignupEmail(e.target.value)}
+                      placeholder="(555) 123-4567"
+                      value={signupPhone}
+                      onChange={(e) => setSignupPhone(e.target.value)}
                       disabled={signupStatus === "loading"}
                       className="flex-1 px-4 py-2.5 bg-white/10 border border-white/20 rounded-full text-white placeholder-white/40 text-sm focus:outline-none focus:ring-2 focus:ring-[#E4002B]/50"
                     />
@@ -563,6 +694,9 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                       {signupStatus === "loading" ? "..." : "Get Code"}
                     </button>
                   </div>
+                  <p className="text-white/40 text-[10px] leading-snug">
+                    By submitting, you agree to receive text messages from Calloway Market, including occasional promotions. Msg &amp; data rates may apply. Reply STOP to unsubscribe.
+                  </p>
                   {signupStatus === "error" && <p className="text-rose-300 text-xs">{signupErrorMsg}</p>}
                 </form>
               )}
@@ -709,11 +843,18 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </button>
         <button
           type="button"
-          onClick={() => setShowGenericOrderSheet(true)}
-          className="flex flex-col items-center gap-1 text-gray-500 hover:text-[#E4002B] transition cursor-pointer"
+          onClick={() => setIsCartOpen(true)}
+          className="flex flex-col items-center gap-1 text-gray-500 hover:text-[#E4002B] transition cursor-pointer relative"
         >
-          <ShoppingCart className="w-5 h-5" />
-          <span className="text-[10px] font-semibold">Order</span>
+          <span className="relative">
+            <ShoppingCart className="w-5 h-5" />
+            {cartItemCount > 0 && (
+              <span className="absolute -top-1.5 -right-2 bg-[#E4002B] text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                {cartItemCount > 9 ? "9+" : cartItemCount}
+              </span>
+            )}
+          </span>
+          <span className="text-[10px] font-semibold">Cart</span>
         </button>
       </div>
 
@@ -754,6 +895,187 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
               </button>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* Cart Drawer — review items, adjust quantities, head to checkout */}
+      <AnimatePresence>
+        {isCartOpen && (
+          <div
+            className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50"
+            onClick={() => setIsCartOpen(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 40 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 40 }}
+              className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl p-6 space-y-4 max-h-[85vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between shrink-0">
+                <h3 className="text-lg font-extrabold text-gray-900">Your Cart {cartItemCount > 0 && `(${cartItemCount})`}</h3>
+                <button onClick={() => setIsCartOpen(false)} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-full transition cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {cartLineItems.length === 0 ? (
+                <div className="py-10 text-center space-y-2">
+                  <ShoppingCart className="w-8 h-8 text-gray-300 mx-auto" />
+                  <p className="text-sm text-gray-500">Your cart is empty. Add some items to get started.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="overflow-y-auto space-y-3 flex-1">
+                    {cartLineItems.map(({ product, qty }) => {
+                      const price = (product as any).storePrice ?? product.price ?? 0;
+                      return (
+                        <div key={product.id} className="flex items-center gap-3 border border-gray-100 rounded-xl p-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-gray-900 truncate">{product.name}</p>
+                            <p className="text-xs text-gray-500">${price.toFixed(2)} each</p>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              onClick={() => updateCartQty(product.id, qty - 1)}
+                              className="w-7 h-7 rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50 transition cursor-pointer"
+                            >
+                              −
+                            </button>
+                            <span className="w-5 text-center text-sm font-semibold">{qty}</span>
+                            <button
+                              onClick={() => updateCartQty(product.id, qty + 1)}
+                              className="w-7 h-7 rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50 transition cursor-pointer"
+                            >
+                              +
+                            </button>
+                          </div>
+                          <button
+                            onClick={() => removeFromCart(product.id)}
+                            className="p-1.5 text-gray-300 hover:text-rose-600 transition cursor-pointer shrink-0"
+                            title="Remove"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="border-t border-gray-100 pt-4 space-y-3 shrink-0">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-500">Estimated subtotal</span>
+                      <span className="font-bold text-gray-900">${cartSubtotal.toFixed(2)}</span>
+                    </div>
+                    <p className="text-[11px] text-gray-400 leading-snug">
+                      This is Calloway Market's own in-store price. Prices on DoorDash or Grubhub — including delivery fees, service fees, and markups — may be different.
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={clearCart}
+                        className="px-4 py-2.5 border border-gray-200 text-gray-500 hover:bg-gray-50 text-xs font-bold uppercase tracking-wider rounded-full transition cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                      <button
+                        onClick={openCartCheckout}
+                        className="flex-1 py-2.5 bg-[#E4002B] hover:bg-[#c40025] text-white text-sm font-bold rounded-full transition cursor-pointer"
+                      >
+                        Choose Delivery
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Cart Checkout — pick a delivery service, see the price disclaimer,
+          then get a copyable order list (DoorDash/Grubhub don't support
+          pushing cart contents in from an outside site). */}
+      <AnimatePresence>
+        {showCartCheckout && (
+          <div
+            className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50"
+            onClick={closeCartCheckout}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 40 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 40 }}
+              className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl p-6 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-extrabold text-gray-900">
+                  {cartCheckoutStep === "choose" ? "Choose delivery service" : "Your order list"}
+                </h3>
+                <button onClick={closeCartCheckout} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-full transition cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {cartCheckoutStep === "choose" ? (
+                <>
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[11px] text-amber-800 leading-snug">
+                    ⚠️ Prices may differ on the delivery company's website — DoorDash and Grubhub set their own item prices, delivery fees, and service fees, which can be higher than shown here.
+                  </div>
+                  <button
+                    onClick={() => chooseCartCheckoutService("doordash")}
+                    className="w-full py-3.5 bg-[#FF3008] hover:bg-[#E52B07] text-white font-bold text-sm rounded-full transition cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    🛵 Continue to DoorDash
+                  </button>
+                  <button
+                    onClick={() => chooseCartCheckoutService("grubhub")}
+                    className="w-full py-3.5 bg-[#F63440] hover:bg-[#d92b36] text-white font-bold text-sm rounded-full transition cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    🍔 Continue to Grubhub
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs text-gray-500">
+                    {cartCheckoutService === "doordash" ? "DoorDash" : "Grubhub"} doesn't let outside sites add items
+                    to your cart automatically — here's your list to quickly re-add once you're there.
+                  </p>
+                  <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 max-h-48 overflow-y-auto">
+                    <pre className="text-xs text-gray-700 whitespace-pre-wrap font-sans">{buildOrderListText()}</pre>
+                  </div>
+                  <button
+                    onClick={handleCopyOrderList}
+                    className="w-full py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-bold uppercase tracking-wider rounded-full transition cursor-pointer"
+                  >
+                    {orderListCopied ? "Copied!" : "Copy List"}
+                  </button>
+                  <button
+                    onClick={handleGoToDeliveryService}
+                    className={`w-full py-3.5 text-white font-bold text-sm rounded-full transition cursor-pointer flex items-center justify-center gap-2 ${
+                      cartCheckoutService === "doordash" ? "bg-[#FF3008] hover:bg-[#E52B07]" : "bg-[#F63440] hover:bg-[#d92b36]"
+                    }`}
+                  >
+                    {cartCheckoutService === "doordash" ? "🛵 Open DoorDash" : "🍔 Open Grubhub"}
+                  </button>
+                </>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Cart toast — brief confirmation when an item is added */}
+      <AnimatePresence>
+        {cartToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs font-medium px-4 py-2.5 rounded-full shadow-lg z-50"
+          >
+            {cartToast}
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -910,6 +1232,22 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                     <div className="pt-6 border-t border-gray-100 flex flex-col md:flex-row gap-3">
                       <button
                         type="button"
+                        onClick={() => addToCart(selectedProduct)}
+                        className="flex-1 px-6 py-4 bg-[#E4002B] text-white hover:bg-[#c40025] font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer rounded-full"
+                      >
+                        <ShoppingCart className="w-4 h-4" /> Add to Cart
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleShareProduct(selectedProduct)}
+                        className="px-6 py-4 border border-gray-200 text-gray-600 hover:text-gray-900 hover:bg-gray-50 font-bold text-[11px] uppercase tracking-widest transition cursor-pointer rounded-full flex items-center justify-center gap-2"
+                      >
+                        {shareCopied ? "Link Copied!" : "Share"}
+                      </button>
+                    </div>
+                    <div className="flex flex-col md:flex-row gap-3">
+                      <button
+                        type="button"
                         onClick={() => handleAddToDoorDash(selectedProduct)}
                         className="flex-1 px-6 py-4 bg-[#FF3008] text-white hover:bg-[#E52B07] font-bold text-[11px] uppercase tracking-widest transition shadow-lg flex items-center justify-center gap-2 cursor-pointer rounded-full"
                       >
@@ -1024,4 +1362,3 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     </div>
   );
 }
-
