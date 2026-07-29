@@ -6,6 +6,8 @@ export interface Product {
   description: string;
   origin: string;
   abv: string;
+  proof?: string; // Alcohol proof (2x ABV in the US), e.g. "80 proof" — spirits only.
+  mixerSuggestions?: string; // What this can be mixed with (cocktails, sodas, juices) — spirits/liquor only, not relevant for beer/wine/non-alcoholic items.
   size: string;
   stockStatus: "In Stock" | "Limited Stock" | "Special Order Only" | "Temporarily Out of Stock";
   tastingNotes: string[];
