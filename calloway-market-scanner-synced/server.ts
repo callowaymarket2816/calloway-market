@@ -70,9 +70,20 @@ async function loadProductsFromDisk(): Promise<Product[]> {
     }
     const data = allRows;
     if (data && data.length > 0) {
-      console.log(`Loaded ${data.length} products from Supabase.`);
+      // Defensive filter — drops any row whose "data" came back null,
+      // undefined, or without a usable name/id, instead of letting a
+      // single malformed row (e.g. left over from a botched write) crash
+      // every page that tries to render the full product list.
+      const cleaned = data
+        .map((row) => row.data as Product)
+        .filter((p): p is Product => !!p && typeof p === "object" && typeof p.id === "string" && typeof p.name === "string");
+      const droppedCount = data.length - cleaned.length;
+      if (droppedCount > 0) {
+        console.warn(`Dropped ${droppedCount} malformed product row(s) while loading from Supabase.`);
+      }
+      console.log(`Loaded ${cleaned.length} products from Supabase.`);
       lastProductLoadWasReliable = true;
-      return data.map((row) => row.data as Product);
+      return cleaned;
     }
     lastProductLoadWasReliable = true;
   } catch (err) {
@@ -89,20 +100,28 @@ async function saveProductsToDisk(products: Product[]): Promise<void> {
     console.warn("Supabase not configured — product changes will NOT persist across restarts.");
     return;
   }
-  try {
-    const { error: deleteError } = await supabase
-      .from("website_products")
-      .delete()
-      .neq("id", "__never_matches__");
-    if (deleteError) throw deleteError;
+  // Previously, a failure here (e.g. an insert failing after the delete
+  // already succeeded) was only logged and silently swallowed — the
+  // calling endpoint would still respond with success even though the
+  // live table was now empty or missing rows. This is now re-thrown so
+  // every caller actually knows a save failed instead of reporting false
+  // success on top of a partially-wiped table.
+  const { error: deleteError } = await supabase
+    .from("website_products")
+    .delete()
+    .neq("id", "__never_matches__");
+  if (deleteError) {
+    console.error("Failed to clear products table before save:", deleteError);
+    throw deleteError;
+  }
 
-    if (products.length > 0) {
-      const rows = products.map((p) => ({ id: p.id, data: p, updated_at: new Date().toISOString() }));
-      const { error: insertError } = await supabase.from("website_products").insert(rows);
-      if (insertError) throw insertError;
+  if (products.length > 0) {
+    const rows = products.map((p) => ({ id: p.id, data: p, updated_at: new Date().toISOString() }));
+    const { error: insertError } = await supabase.from("website_products").insert(rows);
+    if (insertError) {
+      console.error("CRITICAL: products table was cleared but re-insert failed — table may now be empty:", insertError);
+      throw insertError;
     }
-  } catch (err) {
-    console.error("Failed to save products to Supabase — changes may not persist:", err);
   }
 }
 
@@ -706,14 +725,24 @@ app.post("/api/products", requireMerchantAuth, async (req, res) => {
   }
 
   currentProducts = [...sanitizedItems, ...currentProducts];
-  await saveProductsToDisk(currentProducts);
-  res.json({ success: true, count: sanitizedItems.length, products: sanitizedItems });
+  try {
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, count: sanitizedItems.length, products: sanitizedItems });
+  } catch (err: any) {
+    console.error("Failed to save uploaded products:", err);
+    res.status(500).json({ error: "Failed to save. Your existing inventory may be affected — please check before retrying." });
+  }
 });
 
 app.delete("/api/products", requireMerchantAuth, async (req, res) => {
   currentProducts = [];
-  await saveProductsToDisk(currentProducts);
-  res.json({ success: true, message: "All inventory has been deleted successfully." });
+  try {
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, message: "All inventory has been deleted successfully." });
+  } catch (err: any) {
+    console.error("Failed to delete all inventory:", err);
+    res.status(500).json({ error: "Failed to delete inventory — please try again." });
+  }
 });
 
 app.delete("/api/products/:id", requireMerchantAuth, async (req, res) => {
@@ -729,8 +758,13 @@ app.delete("/api/products/:id", requireMerchantAuth, async (req, res) => {
   }
 
   currentProducts = currentProducts.filter((p) => p.id !== id);
-  await saveProductsToDisk(currentProducts);
-  res.json({ success: true, message: `Product with ID ${id} deleted.` });
+  try {
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, message: `Product with ID ${id} deleted.` });
+  } catch (err: any) {
+    console.error("Failed to delete product:", err);
+    res.status(500).json({ error: "Failed to delete — please try again." });
+  }
 });
 
 app.patch("/api/products/:id/stock", requireMerchantAuth, async (req, res) => {
@@ -752,8 +786,13 @@ app.patch("/api/products/:id/stock", requireMerchantAuth, async (req, res) => {
   product.stockStatus =
     product.stockStatus === "In Stock" ? "Temporarily Out of Stock" : "In Stock";
   (product as any).updatedAt = new Date().toISOString();
-  await saveProductsToDisk(currentProducts);
-  res.json({ success: true, id, stockStatus: product.stockStatus });
+  try {
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, id, stockStatus: product.stockStatus });
+  } catch (err: any) {
+    console.error("Failed to save stock status change:", err);
+    res.status(500).json({ error: "Failed to save — please try again." });
+  }
 });
 
 app.patch("/api/products/:id/featured", requireMerchantAuth, async (req, res) => {
@@ -774,8 +813,13 @@ app.patch("/api/products/:id/featured", requireMerchantAuth, async (req, res) =>
   }
   product.featured = !product.featured;
   (product as any).updatedAt = new Date().toISOString();
-  await saveProductsToDisk(currentProducts);
-  res.json({ success: true, id, featured: product.featured });
+  try {
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, id, featured: product.featured });
+  } catch (err: any) {
+    console.error("Failed to save featured toggle:", err);
+    res.status(500).json({ error: "Failed to save — please try again." });
+  }
 });
 
 app.patch("/api/products/:id/price", requireMerchantAuth, async (req, res) => {
@@ -818,8 +862,13 @@ app.patch("/api/products/:id/price", requireMerchantAuth, async (req, res) => {
 
   (product as any).updatedAt = new Date().toISOString();
 
-  await saveProductsToDisk(currentProducts);
-  res.json({ success: true, id, price: product.price, storePrice: product.storePrice });
+  try {
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, id, price: product.price, storePrice: product.storePrice });
+  } catch (err: any) {
+    console.error("Failed to save price change:", err);
+    res.status(500).json({ error: "Failed to save — please try again." });
+  }
 });
 
 // General-purpose edit endpoint — updates any combination of fields on an
@@ -869,8 +918,13 @@ app.patch("/api/products/:id", requireMerchantAuth, async (req, res) => {
   }
   (product as any).updatedAt = new Date().toISOString();
 
-  await saveProductsToDisk(currentProducts);
-  res.json({ success: true, product });
+  try {
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, product });
+  } catch (err: any) {
+    console.error("Failed to save product edit:", err);
+    res.status(500).json({ error: "Failed to save — please try again." });
+  }
 });
 
 // One-time cleanup: re-applies the correct category to every existing
@@ -2014,6 +2068,113 @@ app.post("/api/stockroom-sync/push", requireMerchantAuth, async (req, res) => {
   } catch (err: any) {
     console.error("Stockroom sync push failed:", err);
     res.status(500).json({ error: err.message || "Failed to push change live." });
+  }
+});
+
+// Bulk versions of the above — critical that these do ONE read and ONE
+// write for the whole batch, no matter how many items are selected.
+// Firing many individual requests in parallel from the browser was
+// exactly the pattern that caused a real catastrophic data-loss incident
+// earlier in this project (concurrent writes against a delete-and
+// -rewrite save function stomp on each other) — this must never happen
+// again, so bulk actions are handled server-side as a single operation.
+app.post("/api/stockroom-sync/bulk-push", requireMerchantAuth, async (req, res) => {
+  try {
+    const { type, items } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "'items' must be a non-empty array." });
+    }
+
+    const freshProducts = await loadProductsFromDisk();
+    let applied = 0;
+    const errors: string[] = [];
+
+    if (type === "price") {
+      for (const item of items) {
+        const parsedPrice = parseFloat(item.price);
+        if (isNaN(parsedPrice) || parsedPrice < 0) {
+          errors.push(`Skipped "${item.name || item.productId}" — invalid price.`);
+          continue;
+        }
+        const product = freshProducts.find((p) => p.id === item.productId);
+        if (!product) {
+          errors.push(`Skipped "${item.name || item.productId}" — product not found.`);
+          continue;
+        }
+        product.price = parsedPrice;
+        applied++;
+      }
+    } else if (type === "new") {
+      for (const item of items) {
+        const parsedPrice = parseFloat(item.price);
+        if (!item.name || !String(item.name).trim()) {
+          errors.push(`Skipped UPC ${item.upc} — missing name.`);
+          continue;
+        }
+        freshProducts.push({
+          id: `stockroom-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+          name: String(item.name).trim(),
+          category: item.category || "Uncategorized",
+          size: item.size || undefined,
+          upc: item.upc || undefined,
+          price: isNaN(parsedPrice) ? undefined : parsedPrice,
+          updatedAt: new Date().toISOString(),
+        } as any);
+        applied++;
+      }
+    } else {
+      return res.status(400).json({ error: "'type' must be 'price' or 'new'." });
+    }
+
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, applied, errors });
+  } catch (err: any) {
+    console.error("Stockroom bulk push failed:", err);
+    res.status(500).json({ error: err.message || "Bulk push failed." });
+  }
+});
+
+app.post("/api/stockroom-sync/bulk-dismiss", requireMerchantAuth, async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: "Database not configured." });
+  try {
+    const { type, items } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "'items' must be a non-empty array." });
+    }
+    const normalize = (u: string) => String(u || "").replace(/^0+/, "");
+
+    const { data: dismissedRow } = await supabase
+      .from("site_settings")
+      .select("value")
+      .eq("key", "stockroom_sync_dismissed")
+      .maybeSingle();
+    const dismissed: { priceDismissed: Record<string, number>; newDismissed: string[] } = dismissedRow?.value || {
+      priceDismissed: {},
+      newDismissed: [],
+    };
+
+    if (type === "price") {
+      for (const item of items) {
+        dismissed.priceDismissed[normalize(item.upc)] = Number(item.price);
+      }
+    } else if (type === "new") {
+      for (const item of items) {
+        const key = normalize(item.upc);
+        if (!dismissed.newDismissed.includes(key)) dismissed.newDismissed.push(key);
+      }
+    } else {
+      return res.status(400).json({ error: "'type' must be 'price' or 'new'." });
+    }
+
+    const { error } = await supabase
+      .from("site_settings")
+      .upsert({ key: "stockroom_sync_dismissed", value: dismissed }, { onConflict: "key" });
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("Stockroom bulk dismiss failed:", err);
+    res.status(500).json({ error: err.message || "Bulk dismiss failed." });
   }
 });
 
