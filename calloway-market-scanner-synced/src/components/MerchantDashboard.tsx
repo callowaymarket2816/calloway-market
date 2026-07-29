@@ -305,6 +305,250 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // scanned "0888109050047" needs to still match a stored "888109050047".
   const normalizeUpc = (code: string) => String(code).replace(/^0+/, "");
 
+  // Stockroom Sync — pulls proposed changes (new prices, new products)
+  // from the merchant's separate stockroom scanner app and lets them
+  // review each one before anything goes live. See state/handlers below,
+  // wired to the "Stockroom Sync" panel further down.
+  const [stockroomPriceChanges, setStockroomPriceChanges] = useState<any[]>([]);
+  const [stockroomNewProducts, setStockroomNewProducts] = useState<any[]>([]);
+  const [isCheckingStockroom, setIsCheckingStockroom] = useState(false);
+  const [stockroomCheckedOnce, setStockroomCheckedOnce] = useState(false);
+  const [stockroomActionId, setStockroomActionId] = useState<string | null>(null);
+  const [editingNewProductUpc, setEditingNewProductUpc] = useState<string | null>(null);
+
+  const handleCheckStockroomSync = async () => {
+    setIsCheckingStockroom(true);
+    setUploadMessage(null);
+    try {
+      const res = await fetch("/api/stockroom-sync/check", { headers: { "X-Merchant-Key": merchantKey } });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setStockroomPriceChanges(data.priceChanges || []);
+        setStockroomNewProducts(data.newProducts || []);
+        setStockroomCheckedOnce(true);
+      } else {
+        setUploadMessage(data.error || "Failed to check stockroom scanner.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error checking stockroom scanner: ${err.message || err}`);
+    } finally {
+      setIsCheckingStockroom(false);
+    }
+  };
+
+  const handlePushPriceChange = async (change: any) => {
+    setStockroomActionId(change.upc);
+    try {
+      const res = await fetch("/api/stockroom-sync/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ type: "price", productId: change.productId, price: change.newPrice }),
+      });
+      if (res.ok) {
+        setStockroomPriceChanges((prev) => prev.filter((c) => c.upc !== change.upc));
+        logAction(`Stockroom sync: updated "${change.name}" price to $${Number(change.newPrice).toFixed(2)}`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to push price change.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error pushing price change: ${err.message || err}`);
+    } finally {
+      setStockroomActionId(null);
+    }
+  };
+
+  const handleDismissPriceChange = async (change: any) => {
+    setStockroomActionId(change.upc);
+    try {
+      await fetch("/api/stockroom-sync/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ type: "price", upc: change.upc, price: change.newPrice }),
+      });
+      setStockroomPriceChanges((prev) => prev.filter((c) => c.upc !== change.upc));
+    } catch (err: any) {
+      setUploadMessage(`Error dismissing: ${err.message || err}`);
+    } finally {
+      setStockroomActionId(null);
+    }
+  };
+
+  const handlePushNewProduct = async (item: any) => {
+    setStockroomActionId(item.upc);
+    try {
+      const res = await fetch("/api/stockroom-sync/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({
+          type: "new",
+          upc: item.upc,
+          name: item.name,
+          category: item.category,
+          price: item.price,
+        }),
+      });
+      if (res.ok) {
+        setStockroomNewProducts((prev) => prev.filter((p) => p.upc !== item.upc));
+        logAction(`Stockroom sync: added new product "${item.name}"`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to add product.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error adding product: ${err.message || err}`);
+    } finally {
+      setStockroomActionId(null);
+      setEditingNewProductUpc(null);
+    }
+  };
+
+  const handleDismissNewProduct = async (item: any) => {
+    setStockroomActionId(item.upc);
+    try {
+      await fetch("/api/stockroom-sync/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ type: "new", upc: item.upc }),
+      });
+      setStockroomNewProducts((prev) => prev.filter((p) => p.upc !== item.upc));
+    } catch (err: any) {
+      setUploadMessage(`Error dismissing: ${err.message || err}`);
+    } finally {
+      setStockroomActionId(null);
+    }
+  };
+
+  const updateStockroomNewProductField = (upc: string, field: string, value: string) => {
+    setStockroomNewProducts((prev) => prev.map((p) => (p.upc === upc ? { ...p, [field]: value } : p)));
+  };
+
+  // AI Product Detail Enrichment — drafts proof, ABV, mixer suggestions,
+  // and a short remark for alcohol-category products missing them, using
+  // AI. Nothing is ever saved until the merchant reviews (and can edit)
+  // each draft and explicitly approves it — proof/ABV are factual claims
+  // the AI could get wrong for a less common bottle, so these are meant
+  // to be spot-checked, not blindly trusted.
+  const [enrichCandidates, setEnrichCandidates] = useState<any[]>([]);
+  const [enrichDrafts, setEnrichDrafts] = useState<any[]>([]);
+  const [isFindingEnrichCandidates, setIsFindingEnrichCandidates] = useState(false);
+  const [isGeneratingEnrichment, setIsGeneratingEnrichment] = useState(false);
+  const [enrichActionId, setEnrichActionId] = useState<string | null>(null);
+  const [enrichCheckedOnce, setEnrichCheckedOnce] = useState(false);
+
+  const handleFindEnrichCandidates = async () => {
+    setIsFindingEnrichCandidates(true);
+    setUploadMessage(null);
+    setEnrichDrafts([]);
+    try {
+      const res = await fetch("/api/products/enrich-candidates", { headers: { "X-Merchant-Key": merchantKey } });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setEnrichCandidates(data.candidates || []);
+        setEnrichCheckedOnce(true);
+      } else {
+        setUploadMessage(data.error || "Failed to find products needing details.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error: ${err.message || err}`);
+    } finally {
+      setIsFindingEnrichCandidates(false);
+    }
+  };
+
+  const handleGenerateEnrichment = async () => {
+    if (enrichCandidates.length === 0) return;
+    setIsGeneratingEnrichment(true);
+    setUploadMessage(null);
+    try {
+      // Batches of 20 to keep each AI call reasonably sized.
+      const batches: any[][] = [];
+      for (let i = 0; i < enrichCandidates.length; i += 20) {
+        batches.push(enrichCandidates.slice(i, i + 20));
+      }
+      const allDrafts: any[] = [];
+      for (const batch of batches) {
+        const res = await fetch("/api/products/enrich-generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+          body: JSON.stringify({ products: batch }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && Array.isArray(data.drafts)) {
+          for (const draft of data.drafts) {
+            const source = batch.find((b) => b.id === draft.id);
+            allDrafts.push({ ...draft, name: source?.name || "", category: source?.category || "" });
+          }
+        } else {
+          setUploadMessage(data.error || "AI generation failed for one batch.");
+        }
+      }
+      setEnrichDrafts(allDrafts);
+      setEnrichCandidates([]);
+    } catch (err: any) {
+      setUploadMessage(`Error generating details: ${err.message || err}`);
+    } finally {
+      setIsGeneratingEnrichment(false);
+    }
+  };
+
+  const updateEnrichDraftField = (id: string, field: string, value: string) => {
+    setEnrichDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, [field]: value } : d)));
+  };
+
+  const handleApproveEnrichDraft = async (draft: any) => {
+    setEnrichActionId(draft.id);
+    try {
+      const res = await fetch("/api/products/enrich-apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ updates: [draft] }),
+      });
+      if (res.ok) {
+        setEnrichDrafts((prev) => prev.filter((d) => d.id !== draft.id));
+        logAction(`AI enrichment: approved details for "${draft.name}"`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to save details.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error saving details: ${err.message || err}`);
+    } finally {
+      setEnrichActionId(null);
+    }
+  };
+
+  const handleApproveAllEnrichDrafts = async () => {
+    if (enrichDrafts.length === 0) return;
+    setEnrichActionId("__all__");
+    try {
+      const res = await fetch("/api/products/enrich-apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ updates: enrichDrafts }),
+      });
+      if (res.ok) {
+        logAction(`AI enrichment: approved details for ${enrichDrafts.length} products`);
+        setEnrichDrafts([]);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to save details.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error saving details: ${err.message || err}`);
+    } finally {
+      setEnrichActionId(null);
+    }
+  };
+
+  const handleDiscardEnrichDraft = (id: string) => {
+    setEnrichDrafts((prev) => prev.filter((d) => d.id !== id));
+  };
+
   const handleBarcodeDetected = async (upc: string) => {
     setIsScannerOpen(false);
     const normalizedScanned = normalizeUpc(upc);
@@ -1742,11 +1986,10 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     return matchesSearch && matchesCategory && matchesUpcFilter && matchesPhotoReviewFilter;
   });
 
-  // Bulk Email Broadcast — sends a message to every coupon-signup
+  // Bulk SMS Broadcast — sends a text message to every coupon-signup
   // subscriber at once. Real customers receive this, so it requires an
   // explicit confirmation showing exactly how many people will get it
   // before anything actually sends.
-  const [broadcastSubject, setBroadcastSubject] = useState("");
   const [broadcastMessage, setBroadcastMessage] = useState("");
   const [subscriberCount, setSubscriberCount] = useState<number | null>(null);
   const [subscriberList, setSubscriberList] = useState<any[]>([]);
@@ -1762,7 +2005,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     if (subscriberList.length > 0) return; // already loaded, no need to refetch
     setIsLoadingSubscribers(true);
     try {
-      const res = await fetch("/api/email-signup/list", { headers: { "X-Merchant-Key": merchantKey } });
+      const res = await fetch("/api/sms-signup/list", { headers: { "X-Merchant-Key": merchantKey } });
       if (res.ok) {
         const data = await res.json();
         setSubscriberList(data.subscribers || []);
@@ -1776,8 +2019,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
   const downloadSubscribersCsv = () => {
     if (subscriberList.length === 0) return;
-    const headers = ["Email", "Coupon Code", "Signed Up"];
-    const rows = subscriberList.map((s) => [s.email, s.coupon_code, s.created_at]);
+    const headers = ["Phone", "Coupon Code", "Signed Up"];
+    const rows = subscriberList.map((s) => [s.phone, s.coupon_code, s.created_at]);
     const csvContent = [
       headers.join(","),
       ...rows.map((row) => row.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(",")),
@@ -1786,7 +2029,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `calloway_subscribers_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute("download", `calloway_sms_subscribers_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1795,7 +2038,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [broadcastResult, setBroadcastResult] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/email-signup/count", { headers: { "X-Merchant-Key": merchantKey } })
+    fetch("/api/sms-signup/count", { headers: { "X-Merchant-Key": merchantKey } })
       .then((r) => r.json())
       .then((data) => setSubscriberCount(data.count ?? null))
       .catch(() => {});
@@ -1803,11 +2046,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
   const handleSendBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!broadcastSubject.trim() || !broadcastMessage.trim()) return;
+    if (!broadcastMessage.trim()) return;
     const countLabel = subscriberCount ?? "an unknown number of";
     if (
       !window.confirm(
-        `This will send a real email to ${countLabel} subscriber(s) right now. This can't be undone once sent. Continue?`
+        `This will send a real text message to ${countLabel} subscriber(s) right now. This can't be undone once sent. Continue?`
       )
     ) {
       return;
@@ -1815,10 +2058,10 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     setIsSendingBroadcast(true);
     setBroadcastResult(null);
     try {
-      const res = await fetch("/api/email-signup/broadcast", {
+      const res = await fetch("/api/sms-signup/broadcast", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
-        body: JSON.stringify({ subject: broadcastSubject, message: broadcastMessage }),
+        body: JSON.stringify({ message: broadcastMessage }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -1827,8 +2070,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             ? `Sent to ${data.sent} subscriber(s). ${data.failed} failed to send.`
             : `Sent successfully to all ${data.sent} subscriber(s)!`
         );
-        logAction(`Sent email broadcast "${broadcastSubject}" to ${data.sent} subscriber(s)`);
-        setBroadcastSubject("");
+        logAction(`Sent SMS broadcast to ${data.sent} subscriber(s)`);
         setBroadcastMessage("");
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -2393,19 +2635,19 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         </div>
       </div>
 
-      {/* Bulk Email Broadcast */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="email-broadcast">
+      {/* Bulk SMS Broadcast */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="sms-broadcast">
         <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
           <div>
             <span className="text-xs font-semibold tracking-widest text-rose-700 uppercase block mb-1">
-              Customer Email List
+              Customer Phone List
             </span>
             <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-rose-600" />
-              Bulk Email Broadcast
+              Bulk SMS Broadcast
             </h2>
             <p className="text-xs text-gray-500 font-light mt-1">
-              Sends a message to everyone who's signed up for a coupon code on your site.{" "}
+              Sends a text message to everyone who's signed up for a coupon code on your site.{" "}
               {subscriberCount !== null && (
                 <span className="font-semibold text-gray-700">Currently {subscriberCount} subscriber(s).</span>
               )}
@@ -2446,7 +2688,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-100 text-[10px] uppercase font-bold text-slate-400 tracking-wider sticky top-0">
-                    <th className="py-2.5 px-4">Email</th>
+                    <th className="py-2.5 px-4">Phone</th>
                     <th className="py-2.5 px-4">Coupon Code</th>
                     <th className="py-2.5 px-4">Signed Up</th>
                   </tr>
@@ -2454,7 +2696,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 <tbody className="divide-y divide-slate-50">
                   {subscriberList.map((s, idx) => (
                     <tr key={idx} className="hover:bg-slate-50/50">
-                      <td className="py-2 px-4 text-slate-700">{s.email}</td>
+                      <td className="py-2 px-4 text-slate-700">{s.phone}</td>
                       <td className="py-2 px-4 font-mono text-slate-500">{s.coupon_code}</td>
                       <td className="py-2 px-4 text-slate-500">
                         {new Date(s.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
@@ -2480,26 +2722,19 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
         <form onSubmit={handleSendBroadcast} className="space-y-4">
           <div>
-            <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Subject Line</label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. This Weekend Only: 15% Off All Wine"
-              value={broadcastSubject}
-              onChange={(e) => setBroadcastSubject(e.target.value)}
-              className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
-            />
-          </div>
-          <div>
             <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Message</label>
             <textarea
               required
               rows={5}
-              placeholder="Write your message here. Basic line breaks are fine — this gets sent as a simple email, not a fancy template."
+              placeholder="Write your text message here. This gets sent as a plain text — no subject line, no formatting."
               value={broadcastMessage}
               onChange={(e) => setBroadcastMessage(e.target.value)}
               className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition resize-none"
             />
+            <p className="text-[10px] text-gray-400 mt-1">
+              {broadcastMessage.length} characters
+              {broadcastMessage.length > 0 && ` (~${Math.ceil(broadcastMessage.length / 153)} SMS segment${Math.ceil(broadcastMessage.length / 153) !== 1 ? "s" : ""} per message, plus the store sign-off)`}
+            </p>
           </div>
           <button
             type="submit"
@@ -3749,6 +3984,259 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+
+      {/* Stockroom Sync — pulls proposed price/product changes from the
+          merchant's separate stockroom scanner app for review */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-4 my-12">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+          <div>
+            <span className="text-xs font-semibold tracking-widest text-indigo-700 uppercase block mb-1">
+              Stockroom Scanner
+            </span>
+            <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
+              <RefreshCw className="w-5 h-5 text-indigo-700" />
+              Stockroom Sync
+            </h2>
+            <p className="text-xs text-gray-500 font-light mt-1 max-w-xl">
+              Checks your stockroom scanner app for price changes and new products, matched by UPC. Nothing goes
+              live automatically — review each one and push it live, edit it first, or discard it.
+            </p>
+          </div>
+          <button
+            onClick={handleCheckStockroomSync}
+            disabled={isCheckingStockroom}
+            className="px-5 py-2.5 bg-indigo-900 hover:bg-indigo-800 disabled:bg-gray-300 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center gap-2 cursor-pointer shrink-0"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isCheckingStockroom ? "animate-spin" : ""}`} />
+            {isCheckingStockroom ? "Checking..." : "Check for Updates"}
+          </button>
+        </div>
+
+        {stockroomCheckedOnce && stockroomPriceChanges.length === 0 && stockroomNewProducts.length === 0 && (
+          <p className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+            ✓ Everything's in sync — no price changes or new products waiting for review.
+          </p>
+        )}
+
+        {stockroomPriceChanges.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
+              Price Changes ({stockroomPriceChanges.length})
+            </h3>
+            {stockroomPriceChanges.map((change) => (
+              <div key={change.upc} className="flex items-center gap-3 border border-gray-100 rounded-xl p-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate">{change.name}</p>
+                  <p className="text-xs text-gray-500">
+                    ${Number(change.currentPrice).toFixed(2)} → <span className="font-bold text-indigo-700">${Number(change.newPrice).toFixed(2)}</span>
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleDismissPriceChange(change)}
+                  disabled={stockroomActionId === change.upc}
+                  className="px-3 py-2 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer shrink-0"
+                >
+                  Discard
+                </button>
+                <button
+                  onClick={() => handlePushPriceChange(change)}
+                  disabled={stockroomActionId === change.upc}
+                  className="px-3 py-2 bg-indigo-900 hover:bg-indigo-800 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer shrink-0"
+                >
+                  Push Live
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {stockroomNewProducts.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
+              New Products ({stockroomNewProducts.length})
+            </h3>
+            {stockroomNewProducts.map((item) => (
+              <div key={item.upc} className="border border-gray-100 rounded-xl p-3 space-y-2">
+                {editingNewProductUpc === item.upc ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={item.name}
+                      onChange={(e) => updateStockroomNewProductField(item.upc, "name", e.target.value)}
+                      placeholder="Name"
+                      className="col-span-2 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs"
+                    />
+                    <input
+                      type="text"
+                      value={item.category}
+                      onChange={(e) => updateStockroomNewProductField(item.upc, "category", e.target.value)}
+                      placeholder="Category"
+                      className="px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs"
+                    />
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={item.price}
+                      onChange={(e) => updateStockroomNewProductField(item.upc, "price", e.target.value)}
+                      placeholder="Price"
+                      className="px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{item.name || "(no name found)"}</p>
+                      <p className="text-xs text-gray-500">
+                        {item.category || "Uncategorized"} · ${Number(item.price || 0).toFixed(2)} · UPC {item.upc}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => handleDismissNewProduct(item)}
+                    disabled={stockroomActionId === item.upc}
+                    className="px-3 py-2 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    Discard
+                  </button>
+                  <button
+                    onClick={() => setEditingNewProductUpc(editingNewProductUpc === item.upc ? null : item.upc)}
+                    className="px-3 py-2 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    {editingNewProductUpc === item.upc ? "Done Editing" : "Edit"}
+                  </button>
+                  <button
+                    onClick={() => handlePushNewProduct(item)}
+                    disabled={stockroomActionId === item.upc}
+                    className="px-3 py-2 bg-indigo-900 hover:bg-indigo-800 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    Push Live
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* AI Product Detail Enrichment — proof, ABV, mixer suggestions, remarks */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-4 my-12">
+        <div>
+          <span className="text-xs font-semibold tracking-widest text-purple-700 uppercase block mb-1">
+            AI-Assisted
+          </span>
+          <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-purple-700" />
+            Fill In Proof, ABV &amp; Mixer Suggestions
+          </h2>
+          <p className="text-xs text-gray-500 font-light mt-1 max-w-xl">
+            Uses AI to draft proof, ABV, mixer/serving suggestions, and a short remark for alcohol products missing
+            them. These are AI-generated best guesses, not looked up from a verified source — review and correct
+            each one (especially proof/ABV on less common bottles) before approving.
+          </p>
+        </div>
+
+        {enrichDrafts.length === 0 && (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={handleFindEnrichCandidates}
+              disabled={isFindingEnrichCandidates}
+              className="px-5 py-2.5 border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-700 font-bold text-xs uppercase tracking-wider rounded-xl transition cursor-pointer"
+            >
+              {isFindingEnrichCandidates ? "Checking..." : "Find Products Missing Details"}
+            </button>
+            {enrichCheckedOnce && enrichCandidates.length > 0 && (
+              <button
+                onClick={handleGenerateEnrichment}
+                disabled={isGeneratingEnrichment}
+                className="px-5 py-2.5 bg-purple-800 hover:bg-purple-900 disabled:bg-gray-300 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center gap-2 cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                {isGeneratingEnrichment ? `Generating for ${enrichCandidates.length}...` : `Generate for ${enrichCandidates.length} Product(s)`}
+              </button>
+            )}
+            {enrichCheckedOnce && enrichCandidates.length === 0 && (
+              <p className="text-sm text-emerald-700">✓ Every alcohol product already has these details filled in.</p>
+            )}
+          </div>
+        )}
+
+        {enrichDrafts.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
+                Review Drafts ({enrichDrafts.length})
+              </h3>
+              <button
+                onClick={handleApproveAllEnrichDrafts}
+                disabled={enrichActionId !== null}
+                className="px-4 py-2 bg-purple-800 hover:bg-purple-900 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+              >
+                {enrichActionId === "__all__" ? "Saving All..." : "Approve All"}
+              </button>
+            </div>
+            {enrichDrafts.map((draft) => (
+              <div key={draft.id} className="border border-gray-100 rounded-xl p-4 space-y-2">
+                <p className="text-sm font-semibold text-gray-900">{draft.name}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] uppercase font-bold text-gray-400 mb-1">Proof</label>
+                    <input
+                      type="text"
+                      value={draft.proof}
+                      onChange={(e) => updateEnrichDraftField(draft.id, "proof", e.target.value)}
+                      className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase font-bold text-gray-400 mb-1">ABV</label>
+                    <input
+                      type="text"
+                      value={draft.abv}
+                      onChange={(e) => updateEnrichDraftField(draft.id, "abv", e.target.value)}
+                      className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-gray-400 mb-1">Mixer / Serving Suggestions</label>
+                  <input
+                    type="text"
+                    value={draft.mixerSuggestions}
+                    onChange={(e) => updateEnrichDraftField(draft.id, "mixerSuggestions", e.target.value)}
+                    className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-gray-400 mb-1">Remark</label>
+                  <input
+                    type="text"
+                    value={draft.remarks}
+                    onChange={(e) => updateEnrichDraftField(draft.id, "remarks", e.target.value)}
+                    className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs"
+                  />
+                </div>
+                <div className="flex gap-2 justify-end pt-1">
+                  <button
+                    onClick={() => handleDiscardEnrichDraft(draft.id)}
+                    className="px-3 py-2 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    Discard
+                  </button>
+                  <button
+                    onClick={() => handleApproveEnrichDraft(draft)}
+                    disabled={enrichActionId === draft.id}
+                    className="px-3 py-2 bg-purple-800 hover:bg-purple-900 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    Approve
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
