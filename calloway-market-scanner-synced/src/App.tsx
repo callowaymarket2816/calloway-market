@@ -5,12 +5,70 @@ import MerchantDashboard from "./components/MerchantDashboard";
 import { Store, ShieldAlert, BarChart3, MapPin, Eye, Lock, CheckCircle2, AlertCircle, Phone, Clock, ArrowUp } from "lucide-react";
 import callowayLogo from "./assets/calloway-logo.png";
 
+// Catches any rendering crash (e.g. from a malformed product record) and
+// shows the actual error instead of a blank white screen — this is what
+// was happening before: a single bad record anywhere would take down the
+// entire page with zero visible explanation. Now it's contained to a
+// readable error box, and "Reload" is right there instead of a dead end.
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode; label: string },
+  { error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode; label: string }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error(`[${this.props.label}] Render crashed:`, error, info.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 24, maxWidth: 720, margin: "40px auto", fontFamily: "monospace" }}>
+          <h2 style={{ color: "#b91c1c", fontWeight: 700, marginBottom: 12 }}>
+            Something crashed while loading {this.props.label}.
+          </h2>
+          <p style={{ marginBottom: 12, fontSize: 13, color: "#374151" }}>
+            Copy the text below and send it back — this tells us exactly what broke instead of just a blank page.
+          </p>
+          <pre style={{
+            background: "#fee2e2", padding: 12, borderRadius: 8, fontSize: 12,
+            whiteSpace: "pre-wrap", wordBreak: "break-word", color: "#7f1d1d",
+          }}>
+            {this.state.error.message}
+            {"\n\n"}
+            {this.state.error.stack}
+          </pre>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              marginTop: 16, padding: "10px 20px", background: "#111827", color: "white",
+              borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 700,
+            }}
+          >
+            Reload Page
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   const [viewMode, setViewMode] = useState<"customer" | "merchant">("customer");
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchCount, setSearchCount] = useState(0); // Track customer activity to trigger refetches
 
+  // Merchant lock/unlock state.
+  // SECURITY FIX: previously stored a plain "true"/"false" flag in
+  // localStorage that persisted forever and proved nothing to the server.
+  // Now we store the actual verified merchant key in sessionStorage (cleared
+  // when the browser tab closes) and re-send it on every merchant request.
   const [merchantKey, setMerchantKey] = useState<string>(() => {
     return sessionStorage.getItem("calloway_merchant_key") || "";
   });
@@ -19,6 +77,8 @@ export default function App() {
   });
   const [isPasscodeModalOpen, setIsPasscodeModalOpen] = useState(false);
 
+  // Home/scroll-to-top button visibility - only show once the user has
+  // actually scrolled down, not on every page load.
   const [showScrollTop, setShowScrollTop] = useState(false);
   useEffect(() => {
     const handleScroll = () => setShowScrollTop(window.scrollY > 400);
@@ -28,6 +88,7 @@ export default function App() {
   const [passcode, setPasscode] = useState("");
   const [passcodeError, setPasscodeError] = useState("");
 
+  // Fetch initial product catalog from server
   const fetchProducts = async () => {
     setIsLoading(true);
     try {
@@ -47,49 +108,15 @@ export default function App() {
     fetchProducts();
   }, []);
 
-  // Attempts to get the visitor's real GPS coordinates from their browser
-  // (asks permission once). Resolves to null if denied, unavailable, or
-  // the person doesn't respond within 5 seconds — the server automatically
-  // falls back to IP-based location in that case, so this never blocks
-  // the search from being logged.
-  const getBrowserLocation = (): Promise<{ latitude: number; longitude: number } | null> => {
-    return new Promise((resolve) => {
-      if (!("geolocation" in navigator)) {
-        resolve(null);
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          resolve({
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-          });
-        },
-        () => resolve(null), // permission denied or error — fall back silently
-        { timeout: 5000, maximumAge: 600000 } // reuse a location up to 10 min old
-      );
-    });
-  };
-
-  // Post search query to Express server to record local store demand logs.
-  // Includes real GPS coordinates when the visitor grants browser location
-  // access; the server falls back to IP-based location automatically when
-  // they don't, so this always logs a real location either way.
+  // Post search query to Express server to record local store demand logs
   const handleSearchLog = async (query: string, category: string) => {
     try {
-      const location = await getBrowserLocation();
       const res = await fetch("/api/searches", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          query,
-          category,
-          ...(location
-            ? { latitude: location.latitude, longitude: location.longitude }
-            : {}),
-        }),
+        body: JSON.stringify({ query, category }),
       });
       if (res.ok) {
         // Increment search count to trigger real-time updates inside the dashboard if it's open
@@ -122,6 +149,17 @@ export default function App() {
     }
   };
 
+  // Handle Passcode Unlock
+  // SECURITY FIX: previously this checked the entered passcode against
+  // hardcoded plaintext strings ("calloway2816", "2816", "calloway") visible
+  // to anyone who opened browser dev tools, and unlocking only flipped a
+  // local boolean — the real API endpoints were never actually protected.
+  //
+  // Now: the entered code IS the merchant key, and we verify it against the
+  // server itself (which checks it against MERCHANT_API_KEY, a real secret
+  // set in your hosting platform's environment variables, never in code).
+  // Only a server-confirmed correct key unlocks merchant features, and that
+  // same key is then sent on every merchant request going forward.
   const handleUnlock = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasscodeError("");
@@ -146,6 +184,7 @@ export default function App() {
         setPasscodeError("Could not verify access key. Please try again.");
         return;
       }
+      // Server confirmed this key is valid — store it for this session only.
       setMerchantKey(passcode.trim());
       sessionStorage.setItem("calloway_merchant_key", passcode.trim());
       setIsUnlocked(true);
@@ -165,10 +204,12 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col font-sans text-gray-900">
-      <header className="sticky top-0 bg-white border-b border-gray-100 z-40 shadow-xs">
+    <div className="min-h-screen bg-[#0C0B0A] flex flex-col font-sans text-[#F4F1ED]">
+      {/* Universal Top Nav */}
+      <header className="sticky top-0 bg-[#0C0B0A] border-b border-[#F4F1ED]/10 z-40 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-20">
+            {/* Elegant Store Branding - Click circle 3 times or double click to trigger modal */}
             <div 
               className="flex items-center gap-3 cursor-pointer group"
               onClick={() => {
@@ -190,6 +231,7 @@ export default function App() {
               </div>
             </div>
 
+            {/* Portal Toggle Tabs - ONLY shown if unlocked */}
             {isUnlocked ? (
               <div className="flex bg-gray-100 p-1 rounded-xl border border-gray-200/55">
                 <button
@@ -232,43 +274,49 @@ export default function App() {
         </div>
       </header>
 
+      {/* Main Content Stage */}
       <main className={`flex-grow max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-10 ${viewMode === "merchant" ? "bg-slate-50/50 text-gray-800" : ""}`}>
         {viewMode === "customer" ? (
-          <CustomerCatalog
-            products={products}
-            isLoading={isLoading}
-            onSearchLog={handleSearchLog}
-          />
+          <ErrorBoundary label="Customer Catalog">
+            <CustomerCatalog
+              products={products}
+              isLoading={isLoading}
+              onSearchLog={handleSearchLog}
+            />
+          </ErrorBoundary>
         ) : (
-          <MerchantDashboard
-            products={products}
-            onRefreshAllData={fetchProducts}
-            onRunAiInsights={handleRunAiInsights}
-            searchCount={searchCount}
-            merchantKey={merchantKey}
-          />
+          <ErrorBoundary label="Merchant Dashboard">
+            <MerchantDashboard
+              products={products}
+              onRefreshAllData={fetchProducts}
+              onRunAiInsights={handleRunAiInsights}
+              searchCount={searchCount}
+              merchantKey={merchantKey}
+            />
+          </ErrorBoundary>
         )}
       </main>
 
-      <footer className="bg-white border-t border-gray-100 py-8 text-gray-500 font-light">
+      {/* Real Store Info Footer */}
+      <footer className="bg-[#0C0B0A] border-t border-[#F4F1ED]/10 py-8 text-[#F4F1ED]/60 font-light">
         <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
           <div className="flex items-start gap-2.5">
-            <MapPin className="w-4 h-4 text-amber-900 mt-0.5 shrink-0" />
+            <MapPin className="w-4 h-4 text-[#C4A484] mt-0.5 shrink-0" />
             <span>2816 Calloway Dr, Unit 100<br />Bakersfield, CA 93312</span>
           </div>
           <div className="flex items-start gap-2.5">
-            <Phone className="w-4 h-4 text-amber-900 mt-0.5 shrink-0" />
-            <a href="tel:+16618296889" className="hover:text-amber-900 transition">(661) 829-6889</a>
+            <Phone className="w-4 h-4 text-[#C4A484] mt-0.5 shrink-0" />
+            <a href="tel:+16618296889" className="hover:text-[#C4A484] transition">(661) 829-6889</a>
           </div>
           <div className="flex items-start gap-2.5">
-            <Clock className="w-4 h-4 text-amber-900 mt-0.5 shrink-0" />
+            <Clock className="w-4 h-4 text-[#C4A484] mt-0.5 shrink-0" />
             <span>Mon–Thu: 6AM–12AM<br />Fri–Sat: 6AM–2AM<br />Sun: 7AM–11PM</span>
           </div>
         </div>
-        <div className="max-w-7xl mx-auto px-4 mt-6 pt-6 border-t border-gray-100 text-center text-xs">
+        <div className="max-w-7xl mx-auto px-4 mt-6 pt-6 border-t border-[#F4F1ED]/10 text-center text-xs">
           <div 
             onClick={() => setIsPasscodeModalOpen(true)}
-            className="cursor-pointer hover:text-amber-900 transition active:scale-98 font-medium inline-block"
+            className="cursor-pointer hover:text-[#C4A484] transition active:scale-98 font-medium inline-block"
             title="Merchant Login"
           >
             <span>© 2026 Calloway Market.</span>
@@ -276,43 +324,45 @@ export default function App() {
         </div>
       </footer>
 
+      {/* Scroll-to-top / Home button - only visible once scrolled down */}
       {showScrollTop && (
         <button
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          className="fixed bottom-6 right-6 z-30 w-11 h-11 rounded-full bg-[#E4002B] text-white flex items-center justify-center shadow-lg hover:bg-[#c40025] transition cursor-pointer"
+          className="fixed bottom-6 right-6 z-30 w-11 h-11 rounded-full bg-[#C4A484] text-black flex items-center justify-center shadow-lg hover:bg-[#b8956f] transition cursor-pointer"
           title="Back to top"
         >
           <ArrowUp className="w-5 h-5" />
         </button>
       )}
 
+      {/* Passcode Unlock Modal */}
       {isPasscodeModalOpen && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl border border-gray-200 max-w-sm w-full p-6 shadow-2xl relative space-y-4">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-[#121110] rounded-2xl border border-[#F4F1ED]/10 max-w-sm w-full p-6 shadow-2xl relative space-y-4">
             <button
               onClick={() => {
                 setIsPasscodeModalOpen(false);
                 setPasscode("");
                 setPasscodeError("");
               }}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 text-sm cursor-pointer"
+              className="absolute top-4 right-4 text-[#F4F1ED]/40 hover:text-[#F4F1ED]/70 text-sm cursor-pointer"
             >
               ✕
             </button>
             
             <div className="text-center space-y-2">
-              <div className="w-12 h-12 bg-amber-50 text-amber-900 rounded-full flex items-center justify-center mx-auto border border-amber-200">
+              <div className="w-12 h-12 bg-[#C4A484]/10 text-[#C4A484] rounded-full flex items-center justify-center mx-auto border border-[#C4A484]/20">
                 <Lock className="w-5 h-5" />
               </div>
-              <h3 className="font-serif italic text-lg text-gray-900">Merchant Authentication</h3>
-              <p className="text-xs text-gray-500 font-light leading-relaxed">
+              <h3 className="font-serif italic text-lg text-[#F4F1ED]">Merchant Authentication</h3>
+              <p className="text-xs text-[#F4F1ED]/50 font-light leading-relaxed">
                 Please enter the secure Calloway Market passcode to activate store inventory and real-time demand insights.
               </p>
             </div>
 
             <form onSubmit={handleUnlock} className="space-y-4">
               <div className="space-y-1">
-                <label className="block text-[9px] uppercase tracking-widest font-bold text-gray-400">
+                <label className="block text-[9px] uppercase tracking-widest font-bold text-[#F4F1ED]/40">
                   Access Key Passcode
                 </label>
                 <input
@@ -325,12 +375,12 @@ export default function App() {
                     setPasscode(e.target.value);
                     setPasscodeError("");
                   }}
-                  className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition text-center font-mono tracking-widest"
+                  className="w-full px-3.5 py-2.5 bg-[#0C0B0A] border border-[#F4F1ED]/10 rounded-xl text-xs text-[#F4F1ED] focus:outline-none focus:ring-1 focus:ring-[#C4A484] focus:border-[#C4A484] transition text-center font-mono tracking-widest"
                 />
               </div>
 
               {passcodeError && (
-                <div className="p-3 bg-rose-50 text-rose-700 rounded-xl text-[10px] font-medium flex items-center gap-2 border border-rose-200 leading-normal">
+                <div className="p-3 bg-rose-950/30 text-rose-300 rounded-xl text-[10px] font-medium flex items-center gap-2 border border-rose-900/30 leading-normal">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                   <span>{passcodeError}</span>
                 </div>
@@ -344,13 +394,13 @@ export default function App() {
                     setPasscode("");
                     setPasscodeError("");
                   }}
-                  className="flex-1 py-2.5 bg-gray-50 hover:bg-gray-100 text-gray-600 text-xs font-semibold rounded-xl transition cursor-pointer border border-gray-200"
+                  className="flex-1 py-2.5 bg-[#0C0B0A] hover:bg-[#1a1816] text-[#F4F1ED]/70 text-xs font-semibold rounded-xl transition cursor-pointer border border-[#F4F1ED]/10"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-amber-950 hover:bg-amber-900 text-white text-xs font-semibold rounded-xl transition cursor-pointer"
+                  className="flex-1 py-2.5 bg-[#C4A484] hover:bg-[#b8956f] text-[#0C0B0A] text-xs font-semibold rounded-xl transition cursor-pointer"
                 >
                   Authenticate
                 </button>
@@ -362,3 +412,4 @@ export default function App() {
     </div>
   );
 }
+
