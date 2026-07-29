@@ -376,8 +376,26 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     if (toPush.length === 0) return;
     setIsBulkActingStockroom(true);
     try {
-      await Promise.all(toPush.map((c) => handlePushPriceChange(c)));
-      setSelectedPriceChangeUpcs(new Set());
+      const res = await fetch("/api/stockroom-sync/bulk-push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({
+          type: "price",
+          items: toPush.map((c) => ({ productId: c.productId, price: c.newPrice, name: c.name })),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setStockroomPriceChanges((prev) => prev.filter((c) => !selectedPriceChangeUpcs.has(c.upc)));
+        setSelectedPriceChangeUpcs(new Set());
+        setUploadMessage(`Pushed ${data.applied} price change(s) live.${data.errors?.length ? " Some were skipped — check details." : ""}`);
+        logAction(`Stockroom sync: bulk-pushed ${data.applied} price changes`);
+        onRefreshAllData();
+      } else {
+        setUploadMessage(data.error || "Failed to push price changes.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error pushing price changes: ${err.message || err}`);
     } finally {
       setIsBulkActingStockroom(false);
     }
@@ -387,8 +405,18 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     if (toDismiss.length === 0) return;
     setIsBulkActingStockroom(true);
     try {
-      await Promise.all(toDismiss.map((c) => handleDismissPriceChange(c)));
+      await fetch("/api/stockroom-sync/bulk-dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({
+          type: "price",
+          items: toDismiss.map((c) => ({ upc: c.upc, price: c.newPrice })),
+        }),
+      });
+      setStockroomPriceChanges((prev) => prev.filter((c) => !selectedPriceChangeUpcs.has(c.upc)));
       setSelectedPriceChangeUpcs(new Set());
+    } catch (err: any) {
+      setUploadMessage(`Error dismissing: ${err.message || err}`);
     } finally {
       setIsBulkActingStockroom(false);
     }
@@ -398,8 +426,26 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     if (toPush.length === 0) return;
     setIsBulkActingStockroom(true);
     try {
-      await Promise.all(toPush.map((p) => handlePushNewProduct(p)));
-      setSelectedNewProductUpcs(new Set());
+      const res = await fetch("/api/stockroom-sync/bulk-push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({
+          type: "new",
+          items: toPush.map((p) => ({ upc: p.upc, name: p.name, category: p.category, price: p.price })),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setStockroomNewProducts((prev) => prev.filter((p) => !selectedNewProductUpcs.has(p.upc)));
+        setSelectedNewProductUpcs(new Set());
+        setUploadMessage(`Added ${data.applied} new product(s) live.${data.errors?.length ? " Some were skipped — check details." : ""}`);
+        logAction(`Stockroom sync: bulk-added ${data.applied} new products`);
+        onRefreshAllData();
+      } else {
+        setUploadMessage(data.error || "Failed to add products.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error adding products: ${err.message || err}`);
     } finally {
       setIsBulkActingStockroom(false);
     }
@@ -409,8 +455,18 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     if (toDismiss.length === 0) return;
     setIsBulkActingStockroom(true);
     try {
-      await Promise.all(toDismiss.map((p) => handleDismissNewProduct(p)));
+      await fetch("/api/stockroom-sync/bulk-dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({
+          type: "new",
+          items: toDismiss.map((p) => ({ upc: p.upc })),
+        }),
+      });
+      setStockroomNewProducts((prev) => prev.filter((p) => !selectedNewProductUpcs.has(p.upc)));
       setSelectedNewProductUpcs(new Set());
+    } catch (err: any) {
+      setUploadMessage(`Error dismissing: ${err.message || err}`);
     } finally {
       setIsBulkActingStockroom(false);
     }
