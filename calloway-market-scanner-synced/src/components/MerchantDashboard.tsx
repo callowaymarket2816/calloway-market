@@ -2024,8 +2024,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   };
 
   const filteredActiveProducts = (products || []).filter((p: any) => {
-    const matchesSearch = p.name.toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
-                          p.origin.toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
+    const matchesSearch = (p.name || "").toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
+                          (p.origin || "").toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
                           (p.description || "").toLowerCase().includes(manageSearchQuery.toLowerCase());
     const matchesCategory = manageCategoryFilter === "All" || p.category === manageCategoryFilter;
     const matchesUpcFilter = !showMissingUpcOnly || !p.upc;
@@ -3143,12 +3143,12 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                           <td className="py-2 px-4 font-mono text-xs font-semibold text-slate-800">${item.price ? Number(item.price).toFixed(2) : ""}</td>
                           <td className="py-2 px-4">
                             <span className={`text-[10px] font-semibold ${
-                              item.stockStatus.toLowerCase().includes("out") 
+                              (item.stockStatus || "").toLowerCase().includes("out") 
                                 ? "text-rose-600" 
-                                : item.stockStatus.toLowerCase().includes("limit")
+                                : (item.stockStatus || "").toLowerCase().includes("limit")
                                 ? "text-amber-600"
                                 : "text-emerald-600"
-                            }`}>{item.stockStatus}</span>
+                            }`}>{item.stockStatus || "Unknown"}</span>
                           </td>
                         </tr>
                       ))}
@@ -4566,12 +4566,12 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                         </td>
                         <td className="py-3 px-4">
                           <span className={`text-[10px] font-semibold ${
-                            product.stockStatus.toLowerCase().includes("out") 
+                            (product.stockStatus || "").toLowerCase().includes("out") 
                               ? "text-rose-600" 
-                              : product.stockStatus.toLowerCase().includes("limit")
+                              : (product.stockStatus || "").toLowerCase().includes("limit")
                               ? "text-amber-600"
                               : "text-emerald-600"
-                          }`}>{product.stockStatus}</span>
+                          }`}>{product.stockStatus || "Unknown"}</span>
                         </td>
                         <td className="py-3 px-4 text-slate-400 text-[10px] font-mono whitespace-nowrap">
                           {(product as any).updatedAt
