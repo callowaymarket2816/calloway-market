@@ -495,6 +495,39 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
+  const [isRepairingUpcsFromScanner, setIsRepairingUpcsFromScanner] = useState(false);
+  const handleRepairUpcsFromScanner = async () => {
+    if (
+      !window.confirm(
+        "This fills in missing UPCs by matching product names against your stockroom scanner's data. Only products currently missing a UPC are touched — nothing else changes. Continue?"
+      )
+    ) {
+      return;
+    }
+    setIsRepairingUpcsFromScanner(true);
+    setUploadMessage(null);
+    try {
+      const res = await fetch("/api/stockroom-sync/repair-missing-upcs", {
+        method: "POST",
+        headers: { "X-Merchant-Key": merchantKey },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setUploadMessage(
+          `Reattached ${data.matched} UPC(s) by exact name match. ${data.stillMissing} product(s) still have no UPC (name didn't match anything in the scanner).`
+        );
+        logAction(`Repaired ${data.matched} missing UPCs from stockroom scanner data`);
+        onRefreshAllData();
+      } else {
+        setUploadMessage(data.error || "Failed to repair UPCs.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error repairing UPCs: ${err.message || err}`);
+    } finally {
+      setIsRepairingUpcsFromScanner(false);
+    }
+  };
+
   const handlePushPriceChange = async (change: any) => {
     setStockroomActionId(change.upc);
     try {
@@ -4078,14 +4111,25 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               live automatically — review each one and push it live, edit it first, or discard it.
             </p>
           </div>
-          <button
-            onClick={handleCheckStockroomSync}
-            disabled={isCheckingStockroom}
-            className="px-5 py-2.5 bg-indigo-900 hover:bg-indigo-800 disabled:bg-gray-300 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center gap-2 cursor-pointer shrink-0"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isCheckingStockroom ? "animate-spin" : ""}`} />
-            {isCheckingStockroom ? "Checking..." : "Check for Updates"}
-          </button>
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              onClick={handleRepairUpcsFromScanner}
+              disabled={isRepairingUpcsFromScanner}
+              className="px-5 py-2.5 border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 disabled:opacity-50 font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center gap-2 cursor-pointer"
+              title="Fill in missing UPCs by matching product names against your stockroom scanner's data"
+            >
+              <Check className={`w-3.5 h-3.5`} />
+              {isRepairingUpcsFromScanner ? "Repairing..." : "Repair Missing UPCs"}
+            </button>
+            <button
+              onClick={handleCheckStockroomSync}
+              disabled={isCheckingStockroom}
+              className="px-5 py-2.5 bg-indigo-900 hover:bg-indigo-800 disabled:bg-gray-300 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center gap-2 cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isCheckingStockroom ? "animate-spin" : ""}`} />
+              {isCheckingStockroom ? "Checking..." : "Check for Updates"}
+            </button>
+          </div>
         </div>
 
         {stockroomCheckedOnce && stockroomPriceChanges.length === 0 && stockroomNewProducts.length === 0 && (
