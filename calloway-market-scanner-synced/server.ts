@@ -629,22 +629,25 @@ app.post("/api/products/enrich-generate", requireMerchantAuth, async (req, res) 
     return res.status(400).json({ error: "Send at most 20 products per batch." });
   }
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-flash-latest",
-      contents: `You are a knowledgeable liquor store product data assistant for 'Calloway Market' in Bakersfield, California.
+  const promptText = `You are a knowledgeable liquor store product data assistant for 'Calloway Market' in Bakersfield, California.
 For each product below (identified by its id, name, category, and size), provide:
 - proof: the alcohol proof as a short string (e.g. "80 proof"). For beer/wine/RTD where "proof" isn't the normal way to describe it, use ABV terms instead and leave proof as an empty string.
 - abv: the alcohol-by-volume percentage as a short string (e.g. "40%").
 - mixerSuggestions: a short, practical sentence naming 2-4 real things this could be mixed with (e.g. "Mixes well with cola, ginger ale, or in a whiskey sour"). For beer or wine, describe how it's typically served instead (e.g. "Best served chilled, pairs with citrus garnish").
 - remarks: one short, factual sentence describing the product (style, flavor profile, or notable characteristic) — no marketing fluff.
 
-If you are not confident about the exact proof/ABV for a specific product, provide your best reasonable estimate for that style/category of product rather than leaving it blank, but keep it plausible and typical for that category.
+Every field must be filled in with your best reasonable estimate for that style/category of product — never leave abv, proof (where applicable), mixerSuggestions, or remarks as an empty string.
 
 Products:
 ${JSON.stringify(batch, null, 2)}
 
-Return strictly a JSON array, one object per product, in the same order, each with: id, proof, abv, mixerSuggestions, remarks.`,
+Return strictly a JSON array, one object per product, in the same order, each with: id, proof, abv, mixerSuggestions, remarks.`;
+
+  const executeGenerate = async (modelName: string) => {
+    if (!ai) throw new Error("AI client not initialized");
+    return await ai.models.generateContent({
+      model: modelName,
+      contents: promptText,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -663,8 +666,38 @@ Return strictly a JSON array, one object per product, in the same order, each wi
         },
       },
     });
+  };
 
-    const text = response.text || "[]";
+  try {
+    let response;
+    let lastError: any = null;
+    // Same models + retry pattern as the working AI Insights feature — a
+    // single hardcoded model name here previously meant one unavailable
+    // model silently broke this whole feature with no fallback.
+    const modelsToTry = ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+
+    for (const currentModel of modelsToTry) {
+      const attempts = currentModel === "gemini-3.5-flash" ? 3 : 1;
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+          response = await executeGenerate(currentModel);
+          break;
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[AI Enrichment] Attempt ${attempt} with model ${currentModel} failed: ${err?.message || err}`);
+          if (attempt < attempts) {
+            await new Promise((resolve) => setTimeout(resolve, attempt === 1 ? 600 : 1500));
+          }
+        }
+      }
+      if (response) break;
+    }
+
+    if (!response) {
+      throw lastError || new Error("Failed to generate content from any model");
+    }
+
+    const text = response.text?.trim() || "[]";
     const parsed = JSON.parse(text);
     res.json({ drafts: parsed });
   } catch (err: any) {
@@ -999,6 +1032,69 @@ app.patch("/api/products/:id", requireMerchantAuth, async (req, res) => {
 // race and overwrite each other with a stale snapshot). Only the category
 // field is touched; everything else about each product is preserved
 // exactly as-is.
+// Merges near-duplicate departments caused by free-text category entry
+// (e.g. "Beer", " Beer", "beer" all being treated as different
+// departments before this was locked down to a dropdown). Groups products
+// by a normalized (trimmed, lowercased) category, then rewrites every
+// product in each group to the most common exact spelling/casing seen —
+// so "Beer" (used on 40 products) wins over a stray "beer" (used on 2),
+// rather than guessing. Single read, single write, same safety pattern as
+// recategorize.
+app.post("/api/products/merge-duplicate-departments", requireMerchantAuth, async (req, res) => {
+  try {
+    const freshProducts = await loadProductsFromDisk();
+
+    const groups = new Map<string, Map<string, number>>();
+    for (const p of freshProducts) {
+      const raw = (p.category || "").trim();
+      if (!raw) continue;
+      const key = raw.toLowerCase();
+      if (!groups.has(key)) groups.set(key, new Map());
+      const variants = groups.get(key)!;
+      variants.set(raw, (variants.get(raw) || 0) + 1);
+    }
+
+    const canonicalFor = new Map<string, string>();
+    let mergedGroups = 0;
+    for (const [key, variants] of groups.entries()) {
+      if (variants.size <= 1) continue; // no duplicates in this group
+      let bestVariant = "";
+      let bestCount = -1;
+      for (const [variant, count] of variants.entries()) {
+        if (count > bestCount) {
+          bestCount = count;
+          bestVariant = variant;
+        }
+      }
+      canonicalFor.set(key, bestVariant);
+      mergedGroups++;
+    }
+
+    let changed = 0;
+    for (const p of freshProducts) {
+      const raw = (p.category || "").trim();
+      if (!raw) continue;
+      const key = raw.toLowerCase();
+      const canonical = canonicalFor.get(key);
+      if (canonical && p.category !== canonical) {
+        p.category = canonical;
+        changed++;
+      } else if (p.category !== raw) {
+        // Not part of a duplicate group, but still had stray whitespace.
+        p.category = raw;
+        changed++;
+      }
+    }
+
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, mergedGroups, productsUpdated: changed });
+  } catch (err: any) {
+    console.error("Merge duplicate departments failed:", err);
+    res.status(500).json({ error: err.message || "Failed to merge departments." });
+  }
+});
+
 app.post("/api/products/recategorize", requireMerchantAuth, async (req, res) => {
   const normalizeCategory = (rawCategory: string): string => {
     let cat = rawCategory || "";
