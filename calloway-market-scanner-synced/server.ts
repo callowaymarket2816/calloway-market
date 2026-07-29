@@ -2026,6 +2026,64 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
   }
 });
 
+// Repairs missing UPCs using the stockroom scanner's product list as the
+// source of truth — matches by normalized product name and fills in the
+// UPC ONLY where a Calloway product currently has none. Nothing else
+// about any product changes, no new products are created, and products
+// that already have a UPC are left untouched. Single read, single write.
+app.post("/api/stockroom-sync/repair-missing-upcs", requireMerchantAuth, async (req, res) => {
+  if (!stockroomSupabase) {
+    return res.status(503).json({ error: "Stockroom scanner connection isn't configured yet (missing STOCKROOM_SUPABASE_URL/STOCKROOM_SUPABASE_ANON_KEY)." });
+  }
+
+  try {
+    const { data: stateRow, error: stateError } = await stockroomSupabase
+      .from("stockroom_state")
+      .select("data")
+      .limit(1)
+      .maybeSingle();
+    if (stateError) throw stateError;
+
+    const scannerProducts = stateRow?.data?.products;
+    if (!Array.isArray(scannerProducts)) {
+      return res.json({ success: true, matched: 0, message: "No scanner data found." });
+    }
+
+    const normalizeName = (str: string) =>
+      String(str || "")
+        .trim()
+        .toUpperCase()
+        .replace(/[.,'"!?]/g, "")
+        .replace(/\s+/g, " ");
+
+    const upcByName = new Map<string, string>();
+    for (const sp of scannerProducts) {
+      if (sp.name && sp.upc) {
+        upcByName.set(normalizeName(sp.name), String(sp.upc));
+      }
+    }
+
+    const freshProducts = await loadProductsFromDisk();
+    let matched = 0;
+    for (const product of freshProducts) {
+      if (!(product as any).upc) {
+        const upc = upcByName.get(normalizeName(product.name));
+        if (upc) {
+          (product as any).upc = upc;
+          matched++;
+        }
+      }
+    }
+
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, matched, totalProducts: freshProducts.length, stillMissing: freshProducts.filter((p) => !(p as any).upc).length });
+  } catch (err: any) {
+    console.error("Repair missing UPCs from scanner failed:", err);
+    res.status(500).json({ error: err.message || "Failed to repair UPCs." });
+  }
+});
+
 app.post("/api/stockroom-sync/push", requireMerchantAuth, async (req, res) => {
   try {
     const { type, upc, productId, name, category, size, price } = req.body;
