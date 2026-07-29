@@ -118,6 +118,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // Manual Form States
   const [newName, setNewName] = useState("");
   const [newCategory, setNewCategory] = useState("Whiskey");
+  const [isAddingNewManualCategory, setIsAddingNewManualCategory] = useState(false);
   const [newOrigin, setNewOrigin] = useState("");
   const [newAbv, setNewAbv] = useState("40%");
   const [newSize, setNewSize] = useState("750ml");
@@ -162,6 +163,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       category: product.category,
       origin: product.origin || "",
       abv: product.abv || "",
+      proof: (product as any).proof || "",
+      mixerSuggestions: (product as any).mixerSuggestions || "",
       size: product.size || "",
       price: product.price ?? "",
       storePrice: (product as any).storePrice ?? "",
@@ -184,6 +187,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         category: editForm.category,
         origin: editForm.origin,
         abv: editForm.abv,
+        proof: editForm.proof,
+        mixerSuggestions: editForm.mixerSuggestions,
         size: editForm.size,
         stockStatus: editForm.stockStatus,
         description: editForm.description,
@@ -508,6 +513,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       });
       if (res.ok) {
         setEnrichDrafts((prev) => prev.filter((d) => d.id !== draft.id));
+        setUploadMessage(`Saved proof/ABV/mixer details for "${draft.name}".`);
         logAction(`AI enrichment: approved details for "${draft.name}"`);
         onRefreshAllData();
       } else {
@@ -532,6 +538,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       });
       if (res.ok) {
         logAction(`AI enrichment: approved details for ${enrichDrafts.length} products`);
+        setUploadMessage(`Saved proof/ABV/mixer details for ${enrichDrafts.length} product(s).`);
         setEnrichDrafts([]);
         onRefreshAllData();
       } else {
@@ -976,6 +983,42 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       setUploadMessage(`Error fixing categories: ${err.message || err}`);
     } finally {
       setIsRecategorizing(false);
+    }
+  };
+
+  const [isMergingDepartments, setIsMergingDepartments] = useState(false);
+  const handleMergeDuplicateDepartments = async () => {
+    if (
+      !window.confirm(
+        "This scans for departments that only differ by typo/spacing/capitalization (like \"Beer\" vs \"beer \") and merges them into one. Nothing else about any product changes. Continue?"
+      )
+    ) {
+      return;
+    }
+    setIsMergingDepartments(true);
+    setUploadMessage(null);
+    try {
+      const res = await fetch("/api/products/merge-duplicate-departments", {
+        method: "POST",
+        headers: { "X-Merchant-Key": merchantKey },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUploadMessage(
+          data.mergedGroups > 0
+            ? `Merged ${data.mergedGroups} duplicate department(s), updating ${data.productsUpdated} product(s).`
+            : "No duplicate departments found — everything was already clean."
+        );
+        logAction(`Merged ${data.mergedGroups} duplicate departments`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to merge departments.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error merging departments: ${err.message || err}`);
+    } finally {
+      setIsMergingDepartments(false);
     }
   };
 
@@ -1799,9 +1842,26 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // used instead of a fixed hardcoded list, so any real department (like
   // "Add On" or anything else that exists in your data) is always
   // selectable/filterable, not just a preset handful of names.
-  const uniqueCategories = Array.from(
-    new Set((products || []).map((p) => p.category).filter((c): c is string => !!c && c.trim().length > 0))
-  ).sort();
+  //
+  // Normalized so "Beer", " Beer", and "beer " all collapse into a single
+  // canonical entry instead of showing up as separate departments — free
+  // -text category entry previously let small typos/casing differences
+  // silently create duplicate departments.
+  const categoryCounts = new Map<string, { display: string; count: number }>();
+  for (const p of products || []) {
+    const raw = (p.category || "").trim();
+    if (!raw) continue;
+    const key = raw.toLowerCase();
+    const existing = categoryCounts.get(key);
+    if (existing) {
+      existing.count++;
+    } else {
+      categoryCounts.set(key, { display: raw, count: 1 });
+    }
+  }
+  const uniqueCategories = Array.from(categoryCounts.values())
+    .map((c) => c.display)
+    .sort();
 
   const missingUpcCount = (products || []).filter((p: any) => !p.upc).length;
 
@@ -3130,22 +3190,48 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
               <div>
                 <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Category</label>
-                <input
-                  type="text"
-                  list="manual-category-options"
-                  value={newCategory}
-                  onChange={(e) => setNewCategory(e.target.value)}
-                  placeholder="Pick an existing one or type a brand new department"
-                  className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
-                />
-                <datalist id="manual-category-options">
-                  {uniqueCategories.map((cat) => (
-                    <option key={cat} value={cat} />
-                  ))}
-                </datalist>
+                {isAddingNewManualCategory ? (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      autoFocus
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value)}
+                      placeholder="New department name"
+                      className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingNewManualCategory(false)}
+                      className="px-3 py-2.5 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-xl transition cursor-pointer shrink-0"
+                    >
+                      Back to List
+                    </button>
+                  </div>
+                ) : (
+                  <select
+                    value={newCategory}
+                    onChange={(e) => {
+                      if (e.target.value === "__new__") {
+                        setNewCategory("");
+                        setIsAddingNewManualCategory(true);
+                      } else {
+                        setNewCategory(e.target.value);
+                      }
+                    }}
+                    className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition cursor-pointer"
+                  >
+                    {!uniqueCategories.some((c) => c.toLowerCase() === (newCategory || "").toLowerCase()) && newCategory && (
+                      <option value={newCategory}>{newCategory} (not in list)</option>
+                    )}
+                    {uniqueCategories.map((cat) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                    <option value="__new__">+ Add New Department...</option>
+                  </select>
+                )}
                 <p className="text-[10px] text-gray-400 mt-1">
-                  Suggestions come from your real live inventory — type any new department name (like "Add On") if
-                  it doesn't exist yet.
+                  Pick an existing department, or choose "+ Add New Department" if this genuinely doesn't fit anywhere yet.
                 </p>
               </div>
 
@@ -4403,6 +4489,16 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             </button>
             <button
               type="button"
+              onClick={handleMergeDuplicateDepartments}
+              disabled={isMergingDepartments || !products || products.length === 0}
+              className="px-4 py-2.5 bg-purple-50 hover:bg-purple-100 text-purple-700 disabled:bg-gray-50 disabled:text-gray-400 border border-purple-200/50 hover:border-purple-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
+              title="Merge departments that only differ by typo, spacing, or capitalization (e.g. 'Beer' vs 'beer ') into one"
+            >
+              <RefreshCw className={`w-4 h-4 ${isMergingDepartments ? "animate-spin" : ""}`} />
+              {isMergingDepartments ? "Merging..." : "Merge Duplicate Departments"}
+            </button>
+            <button
+              type="button"
               onClick={handleDeleteAllInventory}
               disabled={isDeletingAll || !products || products.length === 0}
               className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 disabled:bg-gray-50 disabled:text-gray-400 border border-rose-200/50 hover:border-rose-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
@@ -4800,12 +4896,45 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 </div>
                 <div>
                   <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Category</label>
-                  <input
-                    type="text"
-                    value={editForm.category}
-                    onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
-                  />
+                  {editForm.isAddingNewCategory ? (
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        autoFocus
+                        value={editForm.category}
+                        onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
+                        placeholder="New department name"
+                        className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setEditForm({ ...editForm, isAddingNewCategory: false })}
+                        className="px-3 py-2.5 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-xl transition cursor-pointer shrink-0"
+                      >
+                        Back to List
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      value={editForm.category}
+                      onChange={(e) => {
+                        if (e.target.value === "__new__") {
+                          setEditForm({ ...editForm, category: "", isAddingNewCategory: true });
+                        } else {
+                          setEditForm({ ...editForm, category: e.target.value });
+                        }
+                      }}
+                      className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition cursor-pointer"
+                    >
+                      {!uniqueCategories.some((c) => c.toLowerCase() === (editForm.category || "").toLowerCase()) && editForm.category && (
+                        <option value={editForm.category}>{editForm.category} (not in list)</option>
+                      )}
+                      {uniqueCategories.map((cat) => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                      <option value="__new__">+ Add New Department...</option>
+                    </select>
+                  )}
                 </div>
               </div>
 
@@ -4859,6 +4988,15 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                     type="text"
                     value={editForm.abv}
                     onChange={(e) => setEditForm({ ...editForm, abv: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Proof</label>
+                  <input
+                    type="text"
+                    value={editForm.proof || ""}
+                    onChange={(e) => setEditForm({ ...editForm, proof: e.target.value })}
                     className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
                   />
                 </div>
@@ -4940,6 +5078,15 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                     rows={2}
                     value={editForm.foodPairing}
                     onChange={(e) => setEditForm({ ...editForm, foodPairing: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition resize-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Mixer Suggestions</label>
+                  <textarea
+                    rows={2}
+                    value={editForm.mixerSuggestions || ""}
+                    onChange={(e) => setEditForm({ ...editForm, mixerSuggestions: e.target.value })}
                     className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition resize-none"
                   />
                 </div>
