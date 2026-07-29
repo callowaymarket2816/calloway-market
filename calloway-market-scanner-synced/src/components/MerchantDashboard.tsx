@@ -2066,10 +2066,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     return matchesSearch && matchesCategory && matchesUpcFilter && matchesPhotoReviewFilter;
   });
 
-  // Bulk SMS Broadcast — sends a text message to every coupon-signup
+  // Bulk Email Broadcast — sends a message to every coupon-signup
   // subscriber at once. Real customers receive this, so it requires an
   // explicit confirmation showing exactly how many people will get it
   // before anything actually sends.
+  const [broadcastSubject, setBroadcastSubject] = useState("");
   const [broadcastMessage, setBroadcastMessage] = useState("");
   const [subscriberCount, setSubscriberCount] = useState<number | null>(null);
   const [subscriberList, setSubscriberList] = useState<any[]>([]);
@@ -2085,7 +2086,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     if (subscriberList.length > 0) return; // already loaded, no need to refetch
     setIsLoadingSubscribers(true);
     try {
-      const res = await fetch("/api/sms-signup/list", { headers: { "X-Merchant-Key": merchantKey } });
+      const res = await fetch("/api/email-signup/list", { headers: { "X-Merchant-Key": merchantKey } });
       if (res.ok) {
         const data = await res.json();
         setSubscriberList(data.subscribers || []);
@@ -2099,8 +2100,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
   const downloadSubscribersCsv = () => {
     if (subscriberList.length === 0) return;
-    const headers = ["Phone", "Coupon Code", "Signed Up"];
-    const rows = subscriberList.map((s) => [s.phone, s.coupon_code, s.created_at]);
+    const headers = ["Email", "Coupon Code", "Signed Up"];
+    const rows = subscriberList.map((s) => [s.email, s.coupon_code, s.created_at]);
     const csvContent = [
       headers.join(","),
       ...rows.map((row) => row.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(",")),
@@ -2109,7 +2110,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `calloway_sms_subscribers_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute("download", `calloway_subscribers_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -2118,7 +2119,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [broadcastResult, setBroadcastResult] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/sms-signup/count", { headers: { "X-Merchant-Key": merchantKey } })
+    fetch("/api/email-signup/count", { headers: { "X-Merchant-Key": merchantKey } })
       .then((r) => r.json())
       .then((data) => setSubscriberCount(data.count ?? null))
       .catch(() => {});
@@ -2126,11 +2127,11 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
   const handleSendBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!broadcastMessage.trim()) return;
+    if (!broadcastSubject.trim() || !broadcastMessage.trim()) return;
     const countLabel = subscriberCount ?? "an unknown number of";
     if (
       !window.confirm(
-        `This will send a real text message to ${countLabel} subscriber(s) right now. This can't be undone once sent. Continue?`
+        `This will send a real email to ${countLabel} subscriber(s) right now. This can't be undone once sent. Continue?`
       )
     ) {
       return;
@@ -2138,10 +2139,10 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     setIsSendingBroadcast(true);
     setBroadcastResult(null);
     try {
-      const res = await fetch("/api/sms-signup/broadcast", {
+      const res = await fetch("/api/email-signup/broadcast", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
-        body: JSON.stringify({ message: broadcastMessage }),
+        body: JSON.stringify({ subject: broadcastSubject, message: broadcastMessage }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -2150,7 +2151,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             ? `Sent to ${data.sent} subscriber(s). ${data.failed} failed to send.`
             : `Sent successfully to all ${data.sent} subscriber(s)!`
         );
-        logAction(`Sent SMS broadcast to ${data.sent} subscriber(s)`);
+        logAction(`Sent email broadcast "${broadcastSubject}" to ${data.sent} subscriber(s)`);
+        setBroadcastSubject("");
         setBroadcastMessage("");
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -2715,19 +2717,19 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         </div>
       </div>
 
-      {/* Bulk SMS Broadcast */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="sms-broadcast">
+      {/* Bulk Email Broadcast */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="email-broadcast">
         <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
           <div>
             <span className="text-xs font-semibold tracking-widest text-rose-700 uppercase block mb-1">
-              Customer Phone List
+              Customer Email List
             </span>
             <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-rose-600" />
-              Bulk SMS Broadcast
+              Bulk Email Broadcast
             </h2>
             <p className="text-xs text-gray-500 font-light mt-1">
-              Sends a text message to everyone who's signed up for a coupon code on your site.{" "}
+              Sends a message to everyone who's signed up for a coupon code on your site.{" "}
               {subscriberCount !== null && (
                 <span className="font-semibold text-gray-700">Currently {subscriberCount} subscriber(s).</span>
               )}
@@ -2768,7 +2770,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-100 text-[10px] uppercase font-bold text-slate-400 tracking-wider sticky top-0">
-                    <th className="py-2.5 px-4">Phone</th>
+                    <th className="py-2.5 px-4">Email</th>
                     <th className="py-2.5 px-4">Coupon Code</th>
                     <th className="py-2.5 px-4">Signed Up</th>
                   </tr>
@@ -2776,7 +2778,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 <tbody className="divide-y divide-slate-50">
                   {subscriberList.map((s, idx) => (
                     <tr key={idx} className="hover:bg-slate-50/50">
-                      <td className="py-2 px-4 text-slate-700">{s.phone}</td>
+                      <td className="py-2 px-4 text-slate-700">{s.email}</td>
                       <td className="py-2 px-4 font-mono text-slate-500">{s.coupon_code}</td>
                       <td className="py-2 px-4 text-slate-500">
                         {new Date(s.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
@@ -2802,19 +2804,26 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
         <form onSubmit={handleSendBroadcast} className="space-y-4">
           <div>
+            <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Subject Line</label>
+            <input
+              type="text"
+              required
+              placeholder="e.g. This Weekend Only: 15% Off All Wine"
+              value={broadcastSubject}
+              onChange={(e) => setBroadcastSubject(e.target.value)}
+              className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition"
+            />
+          </div>
+          <div>
             <label className="block text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1.5">Message</label>
             <textarea
               required
               rows={5}
-              placeholder="Write your text message here. This gets sent as a plain text — no subject line, no formatting."
+              placeholder="Write your message here. Basic line breaks are fine — this gets sent as a simple email, not a fancy template."
               value={broadcastMessage}
               onChange={(e) => setBroadcastMessage(e.target.value)}
               className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-900 focus:border-amber-900 transition resize-none"
             />
-            <p className="text-[10px] text-gray-400 mt-1">
-              {broadcastMessage.length} characters
-              {broadcastMessage.length > 0 && ` (~${Math.ceil(broadcastMessage.length / 153)} SMS segment${Math.ceil(broadcastMessage.length / 153) !== 1 ? "s" : ""} per message, plus the store sign-off)`}
-            </p>
           </div>
           <button
             type="submit"
