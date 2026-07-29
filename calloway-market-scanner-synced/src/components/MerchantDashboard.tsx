@@ -321,9 +321,107 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [stockroomActionId, setStockroomActionId] = useState<string | null>(null);
   const [editingNewProductUpc, setEditingNewProductUpc] = useState<string | null>(null);
 
+  // Department filter + multi-select — lets the merchant narrow down to
+  // one department at a time (e.g. just "Beer") and act on several items
+  // at once instead of one-by-one.
+  const [stockroomDeptFilter, setStockroomDeptFilter] = useState("All");
+  const [selectedPriceChangeUpcs, setSelectedPriceChangeUpcs] = useState<Set<string>>(new Set());
+  const [selectedNewProductUpcs, setSelectedNewProductUpcs] = useState<Set<string>>(new Set());
+  const [isBulkActingStockroom, setIsBulkActingStockroom] = useState(false);
+
+  const stockroomDepartments = Array.from(
+    new Set(
+      [...stockroomPriceChanges, ...stockroomNewProducts]
+        .map((item) => (item.category || "Uncategorized").trim())
+        .filter(Boolean)
+    )
+  ).sort();
+
+  const filteredPriceChanges = stockroomPriceChanges.filter(
+    (c) => stockroomDeptFilter === "All" || (c.category || "Uncategorized") === stockroomDeptFilter
+  );
+  const filteredNewProducts = stockroomNewProducts.filter(
+    (p) => stockroomDeptFilter === "All" || (p.category || "Uncategorized") === stockroomDeptFilter
+  );
+
+  const togglePriceChangeSelection = (upc: string) => {
+    setSelectedPriceChangeUpcs((prev) => {
+      const next = new Set(prev);
+      if (next.has(upc)) next.delete(upc);
+      else next.add(upc);
+      return next;
+    });
+  };
+  const toggleNewProductSelection = (upc: string) => {
+    setSelectedNewProductUpcs((prev) => {
+      const next = new Set(prev);
+      if (next.has(upc)) next.delete(upc);
+      else next.add(upc);
+      return next;
+    });
+  };
+  const toggleSelectAllPriceChanges = () => {
+    setSelectedPriceChangeUpcs((prev) =>
+      prev.size === filteredPriceChanges.length ? new Set() : new Set(filteredPriceChanges.map((c) => c.upc))
+    );
+  };
+  const toggleSelectAllNewProducts = () => {
+    setSelectedNewProductUpcs((prev) =>
+      prev.size === filteredNewProducts.length ? new Set() : new Set(filteredNewProducts.map((p) => p.upc))
+    );
+  };
+
+  const handleBulkPushPriceChanges = async () => {
+    const toPush = stockroomPriceChanges.filter((c) => selectedPriceChangeUpcs.has(c.upc));
+    if (toPush.length === 0) return;
+    setIsBulkActingStockroom(true);
+    try {
+      await Promise.all(toPush.map((c) => handlePushPriceChange(c)));
+      setSelectedPriceChangeUpcs(new Set());
+    } finally {
+      setIsBulkActingStockroom(false);
+    }
+  };
+  const handleBulkDismissPriceChanges = async () => {
+    const toDismiss = stockroomPriceChanges.filter((c) => selectedPriceChangeUpcs.has(c.upc));
+    if (toDismiss.length === 0) return;
+    setIsBulkActingStockroom(true);
+    try {
+      await Promise.all(toDismiss.map((c) => handleDismissPriceChange(c)));
+      setSelectedPriceChangeUpcs(new Set());
+    } finally {
+      setIsBulkActingStockroom(false);
+    }
+  };
+  const handleBulkPushNewProducts = async () => {
+    const toPush = stockroomNewProducts.filter((p) => selectedNewProductUpcs.has(p.upc));
+    if (toPush.length === 0) return;
+    setIsBulkActingStockroom(true);
+    try {
+      await Promise.all(toPush.map((p) => handlePushNewProduct(p)));
+      setSelectedNewProductUpcs(new Set());
+    } finally {
+      setIsBulkActingStockroom(false);
+    }
+  };
+  const handleBulkDismissNewProducts = async () => {
+    const toDismiss = stockroomNewProducts.filter((p) => selectedNewProductUpcs.has(p.upc));
+    if (toDismiss.length === 0) return;
+    setIsBulkActingStockroom(true);
+    try {
+      await Promise.all(toDismiss.map((p) => handleDismissNewProduct(p)));
+      setSelectedNewProductUpcs(new Set());
+    } finally {
+      setIsBulkActingStockroom(false);
+    }
+  };
+
   const handleCheckStockroomSync = async () => {
     setIsCheckingStockroom(true);
     setUploadMessage(null);
+    setStockroomDeptFilter("All");
+    setSelectedPriceChangeUpcs(new Set());
+    setSelectedNewProductUpcs(new Set());
     try {
       const res = await fetch("/api/stockroom-sync/check", { headers: { "X-Merchant-Key": merchantKey } });
       const data = await res.json().catch(() => ({}));
@@ -428,132 +526,6 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
   const updateStockroomNewProductField = (upc: string, field: string, value: string) => {
     setStockroomNewProducts((prev) => prev.map((p) => (p.upc === upc ? { ...p, [field]: value } : p)));
-  };
-
-  // AI Product Detail Enrichment — drafts proof, ABV, mixer suggestions,
-  // and a short remark for alcohol-category products missing them, using
-  // AI. Nothing is ever saved until the merchant reviews (and can edit)
-  // each draft and explicitly approves it — proof/ABV are factual claims
-  // the AI could get wrong for a less common bottle, so these are meant
-  // to be spot-checked, not blindly trusted.
-  const [enrichCandidates, setEnrichCandidates] = useState<any[]>([]);
-  const [enrichDrafts, setEnrichDrafts] = useState<any[]>([]);
-  const [isFindingEnrichCandidates, setIsFindingEnrichCandidates] = useState(false);
-  const [isGeneratingEnrichment, setIsGeneratingEnrichment] = useState(false);
-  const [enrichActionId, setEnrichActionId] = useState<string | null>(null);
-  const [enrichCheckedOnce, setEnrichCheckedOnce] = useState(false);
-
-  const handleFindEnrichCandidates = async () => {
-    setIsFindingEnrichCandidates(true);
-    setUploadMessage(null);
-    setEnrichDrafts([]);
-    try {
-      const res = await fetch("/api/products/enrich-candidates", { headers: { "X-Merchant-Key": merchantKey } });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setEnrichCandidates(data.candidates || []);
-        setEnrichCheckedOnce(true);
-      } else {
-        setUploadMessage(data.error || "Failed to find products needing details.");
-      }
-    } catch (err: any) {
-      setUploadMessage(`Error: ${err.message || err}`);
-    } finally {
-      setIsFindingEnrichCandidates(false);
-    }
-  };
-
-  const handleGenerateEnrichment = async () => {
-    if (enrichCandidates.length === 0) return;
-    setIsGeneratingEnrichment(true);
-    setUploadMessage(null);
-    try {
-      // Batches of 20 to keep each AI call reasonably sized.
-      const batches: any[][] = [];
-      for (let i = 0; i < enrichCandidates.length; i += 20) {
-        batches.push(enrichCandidates.slice(i, i + 20));
-      }
-      const allDrafts: any[] = [];
-      for (const batch of batches) {
-        const res = await fetch("/api/products/enrich-generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
-          body: JSON.stringify({ products: batch }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && Array.isArray(data.drafts)) {
-          for (const draft of data.drafts) {
-            const source = batch.find((b) => b.id === draft.id);
-            allDrafts.push({ ...draft, name: source?.name || "", category: source?.category || "" });
-          }
-        } else {
-          setUploadMessage(data.error || "AI generation failed for one batch.");
-        }
-      }
-      setEnrichDrafts(allDrafts);
-      setEnrichCandidates([]);
-    } catch (err: any) {
-      setUploadMessage(`Error generating details: ${err.message || err}`);
-    } finally {
-      setIsGeneratingEnrichment(false);
-    }
-  };
-
-  const updateEnrichDraftField = (id: string, field: string, value: string) => {
-    setEnrichDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, [field]: value } : d)));
-  };
-
-  const handleApproveEnrichDraft = async (draft: any) => {
-    setEnrichActionId(draft.id);
-    try {
-      const res = await fetch("/api/products/enrich-apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
-        body: JSON.stringify({ updates: [draft] }),
-      });
-      if (res.ok) {
-        setEnrichDrafts((prev) => prev.filter((d) => d.id !== draft.id));
-        setUploadMessage(`Saved proof/ABV/mixer details for "${draft.name}".`);
-        logAction(`AI enrichment: approved details for "${draft.name}"`);
-        onRefreshAllData();
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        setUploadMessage(errData.error || "Failed to save details.");
-      }
-    } catch (err: any) {
-      setUploadMessage(`Error saving details: ${err.message || err}`);
-    } finally {
-      setEnrichActionId(null);
-    }
-  };
-
-  const handleApproveAllEnrichDrafts = async () => {
-    if (enrichDrafts.length === 0) return;
-    setEnrichActionId("__all__");
-    try {
-      const res = await fetch("/api/products/enrich-apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
-        body: JSON.stringify({ updates: enrichDrafts }),
-      });
-      if (res.ok) {
-        logAction(`AI enrichment: approved details for ${enrichDrafts.length} products`);
-        setUploadMessage(`Saved proof/ABV/mixer details for ${enrichDrafts.length} product(s).`);
-        setEnrichDrafts([]);
-        onRefreshAllData();
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        setUploadMessage(errData.error || "Failed to save details.");
-      }
-    } catch (err: any) {
-      setUploadMessage(`Error saving details: ${err.message || err}`);
-    } finally {
-      setEnrichActionId(null);
-    }
-  };
-
-  const handleDiscardEnrichDraft = (id: string) => {
-    setEnrichDrafts((prev) => prev.filter((d) => d.id !== id));
   };
 
   const handleBarcodeDetected = async (upc: string) => {
@@ -1923,47 +1895,6 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
   const [isApplyingMatches, setIsApplyingMatches] = useState(false);
   const [showCandidateReview, setShowCandidateReview] = useState(false);
-
-  // Exact-name UPC reattachment — for when products already exist correctly
-  // (e.g. from a re-import) but are simply missing their UPC. Matches by
-  // exact (normalized) product name against a dropped backup/reference
-  // file and fills in ONLY the UPC on already-missing ones — nothing else
-  // about the product changes, and no new products are created.
-  const [isAttachingUpcs, setIsAttachingUpcs] = useState(false);
-  const handleAttachMissingUpcsFile = (file: File) => {
-    setUploadMessage(null);
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const text = event.target?.result as string;
-        if (!text) throw new Error("File is empty.");
-        const raw = JSON.parse(text);
-        const items = Array.isArray(raw) ? raw : [raw];
-
-        setIsAttachingUpcs(true);
-        const res = await fetch("/api/products/attach-missing-upcs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
-          body: JSON.stringify({ items }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          setUploadMessage(
-            `Repaired ${data.matched} missing UPC(s) and corrected ${data.categoryFixed} category label(s) by exact name match. Nothing else about any product was changed.`
-          );
-          logAction(`Repaired ${data.matched} UPCs and ${data.categoryFixed} categories from backup file by name match`);
-          onRefreshAllData();
-        } else {
-          setUploadMessage(data.error || "Failed to repair products.");
-        }
-      } catch (err: any) {
-        setUploadMessage(`Couldn't read that file: ${err.message || err}`);
-      } finally {
-        setIsAttachingUpcs(false);
-      }
-    };
-    reader.readAsText(file);
-  };
 
   const handleFindUpcCandidates = async () => {
     setIsLoadingCandidates(true);
@@ -4107,17 +4038,65 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </p>
         )}
 
-        {stockroomPriceChanges.length > 0 && (
+        {(stockroomPriceChanges.length > 0 || stockroomNewProducts.length > 0) && (
+          <div className="flex items-center gap-2">
+            <label className="text-[10px] uppercase font-bold text-gray-500 tracking-wider shrink-0">Department</label>
+            <select
+              value={stockroomDeptFilter}
+              onChange={(e) => setStockroomDeptFilter(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-xs cursor-pointer"
+            >
+              <option value="All">All Departments</option>
+              {stockroomDepartments.map((dept) => (
+                <option key={dept} value={dept}>{dept}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {filteredPriceChanges.length > 0 && (
           <div className="space-y-2">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
-              Price Changes ({stockroomPriceChanges.length})
-            </h3>
-            {stockroomPriceChanges.map((change) => (
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedPriceChangeUpcs.size === filteredPriceChanges.length && filteredPriceChanges.length > 0}
+                  onChange={toggleSelectAllPriceChanges}
+                  className="cursor-pointer"
+                />
+                Price Changes ({filteredPriceChanges.length})
+              </label>
+              {selectedPriceChangeUpcs.size > 0 && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleBulkDismissPriceChanges}
+                    disabled={isBulkActingStockroom}
+                    className="px-3 py-1.5 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    Discard {selectedPriceChangeUpcs.size}
+                  </button>
+                  <button
+                    onClick={handleBulkPushPriceChanges}
+                    disabled={isBulkActingStockroom}
+                    className="px-3 py-1.5 bg-indigo-900 hover:bg-indigo-800 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    {isBulkActingStockroom ? "Pushing..." : `Push ${selectedPriceChangeUpcs.size} Live`}
+                  </button>
+                </div>
+              )}
+            </div>
+            {filteredPriceChanges.map((change) => (
               <div key={change.upc} className="flex items-center gap-3 border border-gray-100 rounded-xl p-3">
+                <input
+                  type="checkbox"
+                  checked={selectedPriceChangeUpcs.has(change.upc)}
+                  onChange={() => togglePriceChangeSelection(change.upc)}
+                  className="cursor-pointer shrink-0"
+                />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-gray-900 truncate">{change.name}</p>
                   <p className="text-xs text-gray-500">
-                    ${Number(change.currentPrice).toFixed(2)} → <span className="font-bold text-indigo-700">${Number(change.newPrice).toFixed(2)}</span>
+                    {change.category || "Uncategorized"} · ${Number(change.currentPrice).toFixed(2)} → <span className="font-bold text-indigo-700">${Number(change.newPrice).toFixed(2)}</span>
                   </p>
                 </div>
                 <button
@@ -4139,12 +4118,38 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </div>
         )}
 
-        {stockroomNewProducts.length > 0 && (
+        {filteredNewProducts.length > 0 && (
           <div className="space-y-2">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
-              New Products ({stockroomNewProducts.length})
-            </h3>
-            {stockroomNewProducts.map((item) => (
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedNewProductUpcs.size === filteredNewProducts.length && filteredNewProducts.length > 0}
+                  onChange={toggleSelectAllNewProducts}
+                  className="cursor-pointer"
+                />
+                New Products ({filteredNewProducts.length})
+              </label>
+              {selectedNewProductUpcs.size > 0 && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleBulkDismissNewProducts}
+                    disabled={isBulkActingStockroom}
+                    className="px-3 py-1.5 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    Discard {selectedNewProductUpcs.size}
+                  </button>
+                  <button
+                    onClick={handleBulkPushNewProducts}
+                    disabled={isBulkActingStockroom}
+                    className="px-3 py-1.5 bg-indigo-900 hover:bg-indigo-800 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    {isBulkActingStockroom ? "Pushing..." : `Push ${selectedNewProductUpcs.size} Live`}
+                  </button>
+                </div>
+              )}
+            </div>
+            {filteredNewProducts.map((item) => (
               <div key={item.upc} className="border border-gray-100 rounded-xl p-3 space-y-2">
                 {editingNewProductUpc === item.upc ? (
                   <div className="grid grid-cols-2 gap-2">
@@ -4173,6 +4178,12 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   </div>
                 ) : (
                   <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedNewProductUpcs.has(item.upc)}
+                      onChange={() => toggleNewProductSelection(item.upc)}
+                      className="cursor-pointer shrink-0"
+                    />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-gray-900 truncate">{item.name || "(no name found)"}</p>
                       <p className="text-xs text-gray-500">
@@ -4209,159 +4220,6 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         )}
       </div>
 
-      {/* AI Product Detail Enrichment — proof, ABV, mixer suggestions, remarks */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-4 my-12">
-        <div>
-          <span className="text-xs font-semibold tracking-widest text-purple-700 uppercase block mb-1">
-            AI-Assisted
-          </span>
-          <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-purple-700" />
-            Fill In Proof, ABV &amp; Mixer Suggestions
-          </h2>
-          <p className="text-xs text-gray-500 font-light mt-1 max-w-xl">
-            Uses AI to draft proof, ABV, mixer/serving suggestions, and a short remark for alcohol products missing
-            them. These are AI-generated best guesses, not looked up from a verified source — review and correct
-            each one (especially proof/ABV on less common bottles) before approving.
-          </p>
-        </div>
-
-        {enrichDrafts.length === 0 && (
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={handleFindEnrichCandidates}
-              disabled={isFindingEnrichCandidates}
-              className="px-5 py-2.5 border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-700 font-bold text-xs uppercase tracking-wider rounded-xl transition cursor-pointer"
-            >
-              {isFindingEnrichCandidates ? "Checking..." : "Find Products Missing Details"}
-            </button>
-            {enrichCheckedOnce && enrichCandidates.length > 0 && (
-              <button
-                onClick={handleGenerateEnrichment}
-                disabled={isGeneratingEnrichment}
-                className="px-5 py-2.5 bg-purple-800 hover:bg-purple-900 disabled:bg-gray-300 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center gap-2 cursor-pointer"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                {isGeneratingEnrichment ? `Generating for ${enrichCandidates.length}...` : `Generate for ${enrichCandidates.length} Product(s)`}
-              </button>
-            )}
-            {enrichCheckedOnce && enrichCandidates.length === 0 && (
-              <p className="text-sm text-emerald-700">✓ Every alcohol product already has these details filled in.</p>
-            )}
-          </div>
-        )}
-
-        {enrichDrafts.length > 0 && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
-                Review Drafts ({enrichDrafts.length})
-              </h3>
-              <button
-                onClick={handleApproveAllEnrichDrafts}
-                disabled={enrichActionId !== null}
-                className="px-4 py-2 bg-purple-800 hover:bg-purple-900 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
-              >
-                {enrichActionId === "__all__" ? "Saving All..." : "Approve All"}
-              </button>
-            </div>
-            {enrichDrafts.map((draft) => (
-              <div key={draft.id} className="border border-gray-100 rounded-xl p-4 space-y-2">
-                <p className="text-sm font-semibold text-gray-900">{draft.name}</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[10px] uppercase font-bold text-gray-400 mb-1">Proof</label>
-                    <input
-                      type="text"
-                      value={draft.proof}
-                      onChange={(e) => updateEnrichDraftField(draft.id, "proof", e.target.value)}
-                      className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] uppercase font-bold text-gray-400 mb-1">ABV</label>
-                    <input
-                      type="text"
-                      value={draft.abv}
-                      onChange={(e) => updateEnrichDraftField(draft.id, "abv", e.target.value)}
-                      className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-[10px] uppercase font-bold text-gray-400 mb-1">Mixer / Serving Suggestions</label>
-                  <input
-                    type="text"
-                    value={draft.mixerSuggestions}
-                    onChange={(e) => updateEnrichDraftField(draft.id, "mixerSuggestions", e.target.value)}
-                    className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] uppercase font-bold text-gray-400 mb-1">Remark</label>
-                  <input
-                    type="text"
-                    value={draft.remarks}
-                    onChange={(e) => updateEnrichDraftField(draft.id, "remarks", e.target.value)}
-                    className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs"
-                  />
-                </div>
-                <div className="flex gap-2 justify-end pt-1">
-                  <button
-                    onClick={() => handleDiscardEnrichDraft(draft.id)}
-                    className="px-3 py-2 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
-                  >
-                    Discard
-                  </button>
-                  <button
-                    onClick={() => handleApproveEnrichDraft(draft)}
-                    disabled={enrichActionId === draft.id}
-                    className="px-3 py-2 bg-purple-800 hover:bg-purple-900 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
-                  >
-                    Approve
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Exact-Name UPC Reattachment (from a backup/reference file) */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-4 my-12">
-        <div>
-          <span className="text-xs font-semibold tracking-widest text-emerald-700 uppercase block mb-1">
-            Barcode Coverage
-          </span>
-          <h2 className="text-2xl font-serif text-gray-900 tracking-tight flex items-center gap-2">
-            <Check className="w-5 h-5 text-emerald-700" />
-            Repair Missing UPCs &amp; Categories From a Backup File
-          </h2>
-          <p className="text-xs text-gray-500 font-light mt-1">
-            Drop a JSON file with product names, UPCs, and categories (like a previous restore/export file). Matches
-            by exact product name: fills in UPC only where currently missing, and corrects the category wherever it
-            differs from the backup (e.g. undoing "Fix Existing Categories" over-merging something like Cognac into
-            Brandy). Price, size, and everything else about every product stays exactly as it is right now. No new
-            products are created.
-          </p>
-        </div>
-        <label className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-200 hover:border-emerald-400 rounded-xl p-6 cursor-pointer transition text-xs text-gray-500 font-medium">
-          <Upload className="w-4 h-4 text-gray-400" />
-          {isAttachingUpcs ? "Matching and attaching UPCs..." : "Click or drop a .json backup file here"}
-          <input
-            type="file"
-            accept=".json"
-            className="hidden"
-            disabled={isAttachingUpcs}
-            onChange={(e) => {
-              if (e.target.files && e.target.files[0]) {
-                handleAttachMissingUpcsFile(e.target.files[0]);
-              }
-              e.target.value = "";
-            }}
-          />
-        </label>
-      </div>
 
       {/* Fuzzy UPC Match Recovery */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="upc-recovery">
