@@ -30,6 +30,18 @@ if (!supabase) {
   );
 }
 
+// Separate, read-only connection to the merchant's own stockroom scanner
+// app — a different project entirely from Calloway Market's own database.
+// Only ever read from here; every write still goes through Calloway
+// Market's normal product endpoints after the merchant reviews and
+// approves a change.
+const STOCKROOM_SUPABASE_URL = process.env.STOCKROOM_SUPABASE_URL;
+const STOCKROOM_SUPABASE_ANON_KEY = process.env.STOCKROOM_SUPABASE_ANON_KEY;
+const stockroomSupabase =
+  STOCKROOM_SUPABASE_URL && STOCKROOM_SUPABASE_ANON_KEY
+    ? createClient(STOCKROOM_SUPABASE_URL, STOCKROOM_SUPABASE_ANON_KEY)
+    : null;
+
 let memoryProductsFallback: Product[] = [...PRODUCTS];
 let memorySearchesFallback: SearchQuery[] = [];
 
@@ -571,6 +583,125 @@ if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_
   console.log("GEMINI_API_KEY not set. Server will run with dynamic heuristic-based fallbacks.");
 }
 
+// Categories where proof/ABV/mixer suggestions actually make sense.
+// Applying this to soda, snacks, water, etc. would be meaningless.
+const ALCOHOL_CATEGORIES = [
+  "liquor", "whiskey", "vodka", "tequila", "gin", "rum", "brandy", "cognac",
+  "liqueur", "wine", "beer", "beer & cider", "rtd",
+];
+const isAlcoholCategory = (category: string) =>
+  ALCOHOL_CATEGORIES.some((c) => String(category || "").toLowerCase().includes(c));
+
+// Finds alcohol-category products still missing proof, ABV, or mixer
+// suggestions — candidates for the AI enrichment tool below. Capped so a
+// single run doesn't try to process the entire catalog (and run up a big
+// AI bill) in one go.
+app.get("/api/products/enrich-candidates", requireMerchantAuth, async (req, res) => {
+  try {
+    const freshProducts = await loadProductsFromDisk();
+    const candidates = freshProducts
+      .filter((p) => isAlcoholCategory(p.category) && (!(p as any).proof || !p.abv || !(p as any).mixerSuggestions))
+      .slice(0, 60)
+      .map((p) => ({ id: p.id, name: p.name, category: p.category, size: p.size }));
+    res.json({ candidates, totalEligible: candidates.length });
+  } catch (err: any) {
+    console.error("Failed to find enrichment candidates:", err);
+    res.status(500).json({ error: err.message || "Failed to find candidates." });
+  }
+});
+
+// Drafts proof/ABV/mixer suggestions/remarks for a batch of products using
+// AI, based only on the product name/category/size. This is a DRAFT ONLY
+// — nothing here is saved to any product. Since proof and ABV are factual
+// claims about alcohol content, and the AI is generating from its own
+// knowledge rather than looking anything up, these should always be spot
+// -checked by the merchant before publishing, especially for less common
+// or specialty bottles.
+app.post("/api/products/enrich-generate", requireMerchantAuth, async (req, res) => {
+  if (!ai) {
+    return res.status(503).json({ error: "AI enrichment isn't configured (missing GEMINI_API_KEY)." });
+  }
+  const { products: batch } = req.body;
+  if (!Array.isArray(batch) || batch.length === 0) {
+    return res.status(400).json({ error: "'products' must be a non-empty array." });
+  }
+  if (batch.length > 20) {
+    return res.status(400).json({ error: "Send at most 20 products per batch." });
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-flash-latest",
+      contents: `You are a knowledgeable liquor store product data assistant for 'Calloway Market' in Bakersfield, California.
+For each product below (identified by its id, name, category, and size), provide:
+- proof: the alcohol proof as a short string (e.g. "80 proof"). For beer/wine/RTD where "proof" isn't the normal way to describe it, use ABV terms instead and leave proof as an empty string.
+- abv: the alcohol-by-volume percentage as a short string (e.g. "40%").
+- mixerSuggestions: a short, practical sentence naming 2-4 real things this could be mixed with (e.g. "Mixes well with cola, ginger ale, or in a whiskey sour"). For beer or wine, describe how it's typically served instead (e.g. "Best served chilled, pairs with citrus garnish").
+- remarks: one short, factual sentence describing the product (style, flavor profile, or notable characteristic) — no marketing fluff.
+
+If you are not confident about the exact proof/ABV for a specific product, provide your best reasonable estimate for that style/category of product rather than leaving it blank, but keep it plausible and typical for that category.
+
+Products:
+${JSON.stringify(batch, null, 2)}
+
+Return strictly a JSON array, one object per product, in the same order, each with: id, proof, abv, mixerSuggestions, remarks.`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              id: { type: Type.STRING },
+              proof: { type: Type.STRING },
+              abv: { type: Type.STRING },
+              mixerSuggestions: { type: Type.STRING },
+              remarks: { type: Type.STRING },
+            },
+            required: ["id", "proof", "abv", "mixerSuggestions", "remarks"],
+          },
+        },
+      },
+    });
+
+    const text = response.text || "[]";
+    const parsed = JSON.parse(text);
+    res.json({ drafts: parsed });
+  } catch (err: any) {
+    console.error("AI enrichment generation failed:", err);
+    res.status(500).json({ error: err.message || "AI generation failed." });
+  }
+});
+
+// Applies merchant-approved enrichment drafts to the real products. Only
+// ever called after the merchant has reviewed (and possibly edited) each
+// one in the dashboard — never runs automatically off the AI's raw output.
+app.post("/api/products/enrich-apply", requireMerchantAuth, async (req, res) => {
+  try {
+    const { updates } = req.body;
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return res.status(400).json({ error: "'updates' must be a non-empty array." });
+    }
+    const freshProducts = await loadProductsFromDisk();
+    let applied = 0;
+    for (const u of updates) {
+      const product = freshProducts.find((p) => p.id === u.id);
+      if (!product) continue;
+      if (u.proof !== undefined) (product as any).proof = u.proof;
+      if (u.abv !== undefined) product.abv = u.abv;
+      if (u.mixerSuggestions !== undefined) (product as any).mixerSuggestions = u.mixerSuggestions;
+      if (u.remarks !== undefined) product.description = u.remarks;
+      applied++;
+    }
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, applied });
+  } catch (err: any) {
+    console.error("Failed to apply enrichment:", err);
+    res.status(500).json({ error: err.message || "Failed to apply enrichment." });
+  }
+});
+
 let searchQueries: SearchQuery[] = [];
 
 let currentProducts: Product[] = [...PRODUCTS];
@@ -836,8 +967,8 @@ app.patch("/api/products/:id", requireMerchantAuth, async (req, res) => {
   }
 
   const allowedFields = [
-    "name", "category", "subcategory", "description", "origin", "abv", "size",
-    "stockStatus", "tastingNotes", "foodPairing", "imageColor", "iconName",
+    "name", "category", "subcategory", "description", "origin", "abv", "proof", "size",
+    "stockStatus", "tastingNotes", "foodPairing", "mixerSuggestions", "imageColor", "iconName",
     "popularity", "price", "storePrice", "marginPercent", "featured", "upc",
     "imageUrl", "imageNeedsReview",
   ];
@@ -1486,6 +1617,203 @@ function generateCouponCode(): string {
   return `CALLOWAY-${code}`;
 }
 
+// Normalizes a US phone number into E.164 format (+1XXXXXXXXXX) for Twilio.
+// Accepts common typed formats: (555) 123-4567, 555-123-4567, 5551234567,
+// 15551234567, +15551234567. Returns null if it can't confidently parse a
+// 10-digit US number out of it.
+function normalizePhoneNumber(raw: string): string | null {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return null;
+}
+
+// Sends a single SMS via Twilio's REST API. Requires TWILIO_ACCOUNT_SID and
+// TWILIO_AUTH_TOKEN, plus either TWILIO_MESSAGING_SERVICE_SID (preferred —
+// handles opt-outs/STOP automatically) or a plain TWILIO_FROM_NUMBER.
+async function sendSms(to: string, body: string): Promise<{ ok: boolean; error?: string }> {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+  const fromNumber = process.env.TWILIO_FROM_NUMBER;
+
+  if (!accountSid || !authToken || (!messagingServiceSid && !fromNumber)) {
+    return { ok: false, error: "SMS sending is not configured (missing Twilio credentials)." };
+  }
+
+  try {
+    const params = new URLSearchParams();
+    params.set("To", to);
+    if (messagingServiceSid) {
+      params.set("MessagingServiceSid", messagingServiceSid);
+    } else if (fromNumber) {
+      params.set("From", fromNumber);
+    }
+    params.set("Body", body);
+
+    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+    });
+    if (res.ok) return { ok: true };
+    const errBody = await res.text();
+    console.error(`Twilio send failed for ${to}: ${res.status} ${errBody}`);
+    return { ok: false, error: errBody };
+  } catch (err: any) {
+    console.error(`Twilio send threw for ${to}:`, err);
+    return { ok: false, error: err.message || String(err) };
+  }
+}
+
+app.post("/api/sms-signup", async (req, res) => {
+  const { phone } = req.body;
+  const normalizedPhone = normalizePhoneNumber(phone);
+  if (!normalizedPhone) {
+    return res.status(400).json({ error: "A valid US phone number is required (10 digits)." });
+  }
+
+  if (!supabase) {
+    return res.status(503).json({ error: "Signup is temporarily unavailable. Please try again later." });
+  }
+
+  try {
+    const { data: existing, error: lookupError } = await supabase
+      .from("sms_signups")
+      .select("coupon_code")
+      .eq("phone", normalizedPhone)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+
+    if (existing) {
+      return res.json({ success: true, couponCode: existing.coupon_code, alreadySignedUp: true });
+    }
+
+    let couponCode = generateCouponCode();
+    let insertError = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { error } = await supabase
+        .from("sms_signups")
+        .insert({ phone: normalizedPhone, coupon_code: couponCode });
+      if (!error) {
+        insertError = null;
+        break;
+      }
+      insertError = error;
+      couponCode = generateCouponCode();
+    }
+    if (insertError) throw insertError;
+
+    // "Reply STOP to unsubscribe" is a legal requirement for US SMS
+    // marketing (TCPA), included on every message sent to a number for
+    // the first time, same as the broadcast function below.
+    const smsResult = await sendSms(
+      normalizedPhone,
+      `Calloway Market: Your 10% off code is ${couponCode}. Show this at checkout (excludes cigarettes, tobacco, lotto/lottery; 21+). Reply STOP to unsubscribe.`
+    );
+    if (!smsResult.ok) {
+      console.error(`Coupon code was saved but SMS failed to send to ${normalizedPhone}: ${smsResult.error}`);
+    }
+
+    res.json({ success: true, couponCode, alreadySignedUp: false });
+  } catch (err) {
+    console.error("SMS signup failed:", err);
+    res.status(500).json({ error: "Could not complete signup. Please try again." });
+  }
+});
+
+// Lets the dashboard show "this will send to X subscribers" before the
+// merchant actually commits to sending a broadcast to real customers.
+// Returns the actual subscriber list (phone, signup date, coupon code) —
+// merchant-only, since this is real customer contact information.
+app.get("/api/sms-signup/list", requireMerchantAuth, async (req, res) => {
+  if (!supabase) return res.json({ subscribers: [] });
+  try {
+    const { data, error } = await supabase
+      .from("sms_signups")
+      .select("phone, coupon_code, created_at")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    res.json({ subscribers: data || [] });
+  } catch (err: any) {
+    console.error("Failed to load SMS subscriber list:", err);
+    res.status(500).json({ error: err.message || "Failed to load subscribers." });
+  }
+});
+
+app.get("/api/sms-signup/count", requireMerchantAuth, async (req, res) => {
+  if (!supabase) return res.json({ count: 0 });
+  try {
+    const { count, error } = await supabase
+      .from("sms_signups")
+      .select("*", { count: "exact", head: true });
+    if (error) throw error;
+    res.json({ count: count || 0 });
+  } catch (err: any) {
+    console.error("Failed to count SMS subscribers:", err);
+    res.status(500).json({ error: err.message || "Failed to count subscribers." });
+  }
+});
+
+app.post("/api/sms-signup/broadcast", requireMerchantAuth, async (req, res) => {
+  const { message } = req.body;
+  if (!message || typeof message !== "string") {
+    return res.status(400).json({ error: "'message' is required." });
+  }
+
+  if (!supabase) {
+    return res.status(503).json({ error: "Database not configured." });
+  }
+
+  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+    return res.status(503).json({ error: "SMS sending is not configured (missing Twilio credentials)." });
+  }
+
+  try {
+    const { data: subscribers, error } = await supabase
+      .from("sms_signups")
+      .select("phone");
+    if (error) throw error;
+
+    if (!subscribers || subscribers.length === 0) {
+      return res.json({ success: true, sent: 0, failed: 0, message: "No subscribers found." });
+    }
+
+    const MAX_SAFE_BROADCAST_SIZE = 300;
+    if (subscribers.length > MAX_SAFE_BROADCAST_SIZE) {
+      return res.status(400).json({
+        error: `Subscriber list (${subscribers.length}) is too large to send in a single request safely. Contact your developer to add batched sending.`,
+      });
+    }
+
+    let sent = 0;
+    let failed = 0;
+    const failedPhones: string[] = [];
+    const fullMessage = `${message.trim()}\n\n- Calloway Market. Reply STOP to unsubscribe.`;
+
+    for (const { phone } of subscribers) {
+      const result = await sendSms(phone, fullMessage);
+      if (result.ok) {
+        sent++;
+      } else {
+        failed++;
+        failedPhones.push(phone);
+      }
+      // Same pacing as the email broadcast — avoids hammering the Twilio
+      // API with hundreds of requests back to back.
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+
+    res.json({ success: true, sent, failed, failedPhones });
+  } catch (err: any) {
+    console.error("SMS broadcast failed:", err);
+    res.status(500).json({ error: err.message || "Broadcast failed." });
+  }
+});
+
 app.post("/api/email-signup", async (req, res) => {
   const { email } = req.body;
   if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
@@ -1671,6 +1999,172 @@ app.post("/api/email-signup/broadcast", requireMerchantAuth, async (req, res) =>
   } catch (err: any) {
     console.error("Broadcast email failed:", err);
     res.status(500).json({ error: err.message || "Broadcast failed." });
+  }
+});
+
+// Stockroom Sync — reads the merchant's separate stockroom scanner app
+// (its own Supabase project, read-only) and compares it against Calloway
+// Market's own live catalog by UPC. Nothing here writes anywhere by
+// itself: it only ever returns a list of proposed changes for the
+// merchant to review, edit, push live, or discard one at a time.
+app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
+  if (!stockroomSupabase) {
+    return res.status(503).json({ error: "Stockroom scanner connection isn't configured yet (missing STOCKROOM_SUPABASE_URL/STOCKROOM_SUPABASE_ANON_KEY)." });
+  }
+
+  try {
+    const { data: stateRow, error: stateError } = await stockroomSupabase
+      .from("stockroom_state")
+      .select("data")
+      .limit(1)
+      .maybeSingle();
+    if (stateError) throw stateError;
+
+    const scannerProducts = stateRow?.data?.products;
+    if (!Array.isArray(scannerProducts)) {
+      return res.json({ priceChanges: [], newProducts: [], totalScannerProducts: 0 });
+    }
+
+    const normalize = (upc: string) => String(upc || "").replace(/^0+/, "");
+
+    const freshProducts = await loadProductsFromDisk();
+    const byUpc = new Map<string, Product>();
+    for (const p of freshProducts) {
+      if ((p as any).upc) byUpc.set(normalize((p as any).upc), p);
+    }
+
+    let dismissed: { priceDismissed: Record<string, number>; newDismissed: string[] } = {
+      priceDismissed: {},
+      newDismissed: [],
+    };
+    if (supabase) {
+      const { data: dismissedRow } = await supabase
+        .from("site_settings")
+        .select("value")
+        .eq("key", "stockroom_sync_dismissed")
+        .maybeSingle();
+      if (dismissedRow?.value) dismissed = { ...dismissed, ...dismissedRow.value };
+    }
+
+    const priceChanges: any[] = [];
+    const newProducts: any[] = [];
+
+    for (const sp of scannerProducts) {
+      if (!sp.upc) continue;
+      const key = normalize(sp.upc);
+      const existing = byUpc.get(key);
+      if (existing) {
+        const currentPrice = Number((existing as any).price);
+        const scannerPrice = Number(sp.price);
+        if (!isNaN(scannerPrice) && scannerPrice !== currentPrice) {
+          const dismissedAtPrice = dismissed.priceDismissed[key];
+          if (dismissedAtPrice === scannerPrice) continue; // already reviewed this exact price, don't re-nag
+          priceChanges.push({
+            upc: sp.upc,
+            productId: existing.id,
+            name: existing.name,
+            category: existing.category,
+            currentPrice,
+            newPrice: scannerPrice,
+          });
+        }
+      } else {
+        if (dismissed.newDismissed.includes(key)) continue;
+        newProducts.push({
+          upc: sp.upc,
+          name: sp.name || "",
+          category: sp.category || "",
+          price: sp.price ?? "",
+          cost: sp.cost ?? undefined,
+        });
+      }
+    }
+
+    res.json({ priceChanges, newProducts, totalScannerProducts: scannerProducts.length });
+  } catch (err: any) {
+    console.error("Stockroom sync check failed:", err);
+    res.status(500).json({ error: err.message || "Failed to check stockroom scanner." });
+  }
+});
+
+app.post("/api/stockroom-sync/push", requireMerchantAuth, async (req, res) => {
+  try {
+    const { type, upc, productId, name, category, size, price } = req.body;
+    const parsedPrice = parseFloat(price);
+    if (isNaN(parsedPrice) || parsedPrice < 0) {
+      return res.status(400).json({ error: "A valid price is required." });
+    }
+
+    const freshProducts = await loadProductsFromDisk();
+
+    if (type === "price") {
+      const product = freshProducts.find((p) => p.id === productId);
+      if (!product) return res.status(404).json({ error: "Product not found." });
+      product.price = parsedPrice;
+      currentProducts = freshProducts;
+      await saveProductsToDisk(currentProducts);
+      return res.json({ success: true });
+    }
+
+    if (type === "new") {
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ error: "A product name is required." });
+      }
+      const newProduct: any = {
+        id: `stockroom-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        name: String(name).trim(),
+        category: category || "Uncategorized",
+        size: size || undefined,
+        upc: upc || undefined,
+        price: parsedPrice,
+        updatedAt: new Date().toISOString(),
+      };
+      freshProducts.push(newProduct);
+      currentProducts = freshProducts;
+      await saveProductsToDisk(currentProducts);
+      return res.json({ success: true });
+    }
+
+    res.status(400).json({ error: "'type' must be 'price' or 'new'." });
+  } catch (err: any) {
+    console.error("Stockroom sync push failed:", err);
+    res.status(500).json({ error: err.message || "Failed to push change live." });
+  }
+});
+
+app.post("/api/stockroom-sync/dismiss", requireMerchantAuth, async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: "Database not configured." });
+  try {
+    const { type, upc, price } = req.body;
+    const normalize = (u: string) => String(u || "").replace(/^0+/, "");
+    const key = normalize(upc);
+
+    const { data: dismissedRow } = await supabase
+      .from("site_settings")
+      .select("value")
+      .eq("key", "stockroom_sync_dismissed")
+      .maybeSingle();
+    const dismissed: { priceDismissed: Record<string, number>; newDismissed: string[] } = dismissedRow?.value || {
+      priceDismissed: {},
+      newDismissed: [],
+    };
+
+    if (type === "price") {
+      dismissed.priceDismissed[key] = Number(price);
+    } else if (type === "new") {
+      if (!dismissed.newDismissed.includes(key)) dismissed.newDismissed.push(key);
+    } else {
+      return res.status(400).json({ error: "'type' must be 'price' or 'new'." });
+    }
+
+    const { error } = await supabase
+      .from("site_settings")
+      .upsert({ key: "stockroom_sync_dismissed", value: dismissed }, { onConflict: "key" });
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("Stockroom sync dismiss failed:", err);
+    res.status(500).json({ error: err.message || "Failed to dismiss." });
   }
 });
 
