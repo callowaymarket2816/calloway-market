@@ -943,6 +943,59 @@ app.patch("/api/products/:id", requireMerchantAuth, async (req, res) => {
 // so "Beer" (used on 40 products) wins over a stray "beer" (used on 2),
 // rather than guessing. Single read, single write, same safety pattern as
 // recategorize.
+// Sets every product's stock status to "In Stock" in one pass — for when
+// going through hundreds of products individually to fix stock status
+// isn't realistic. Single read, single write.
+app.post("/api/products/mark-all-in-stock", requireMerchantAuth, async (req, res) => {
+  try {
+    const freshProducts = await loadProductsFromDisk();
+    let changed = 0;
+    for (const p of freshProducts) {
+      if (p.stockStatus !== "In Stock") {
+        p.stockStatus = "In Stock";
+        changed++;
+      }
+    }
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, changed, total: freshProducts.length });
+  } catch (err: any) {
+    console.error("Mark all in stock failed:", err);
+    res.status(500).json({ error: err.message || "Failed to update stock status." });
+  }
+});
+
+// Bulk department change — moves every selected product to one chosen
+// department in a single safe operation, for when the merchant has
+// multiple products selected in the Inventory Management table. Single
+// read, single write, regardless of how many product IDs are selected.
+app.post("/api/products/bulk-set-category", requireMerchantAuth, async (req, res) => {
+  try {
+    const { productIds, category } = req.body;
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return res.status(400).json({ error: "'productIds' must be a non-empty array." });
+    }
+    if (!category || !String(category).trim()) {
+      return res.status(400).json({ error: "'category' is required." });
+    }
+    const freshProducts = await loadProductsFromDisk();
+    const idSet = new Set(productIds);
+    let changed = 0;
+    for (const p of freshProducts) {
+      if (idSet.has(p.id)) {
+        p.category = String(category).trim();
+        changed++;
+      }
+    }
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, changed });
+  } catch (err: any) {
+    console.error("Bulk set category failed:", err);
+    res.status(500).json({ error: err.message || "Failed to update department." });
+  }
+});
+
 app.post("/api/products/merge-duplicate-departments", requireMerchantAuth, async (req, res) => {
   try {
     const freshProducts = await loadProductsFromDisk();
@@ -2163,14 +2216,20 @@ app.post("/api/stockroom-sync/bulk-push", requireMerchantAuth, async (req, res) 
         applied++;
       }
     } else if (type === "new") {
+      let idx = 0;
       for (const item of items) {
         const parsedPrice = parseFloat(item.price);
         if (!item.name || !String(item.name).trim()) {
           errors.push(`Skipped UPC ${item.upc} — missing name.`);
+          idx++;
           continue;
         }
         freshProducts.push({
-          id: `stockroom-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+          // Includes the loop index so pushing hundreds of items in one
+          // batch (fast enough that Date.now() can repeat) still can't
+          // collide — each gets a distinct id even if generated in the
+          // exact same millisecond.
+          id: `stockroom-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000000)}`,
           name: String(item.name).trim(),
           category: item.category || "Uncategorized",
           size: item.size || undefined,
@@ -2179,6 +2238,7 @@ app.post("/api/stockroom-sync/bulk-push", requireMerchantAuth, async (req, res) 
           updatedAt: new Date().toISOString(),
         } as any);
         applied++;
+        idx++;
       }
     } else {
       return res.status(400).json({ error: "'type' must be 'price' or 'new'." });
