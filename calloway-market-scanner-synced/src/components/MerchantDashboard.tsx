@@ -1083,6 +1083,81 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
+  const [isMarkingAllInStock, setIsMarkingAllInStock] = useState(false);
+  const handleMarkAllInStock = async () => {
+    if (
+      !window.confirm(
+        "This sets every product's stock status to \"In Stock\" in one pass — much faster than fixing each one by hand. Continue?"
+      )
+    ) {
+      return;
+    }
+    setIsMarkingAllInStock(true);
+    setUploadMessage(null);
+    try {
+      const res = await fetch("/api/products/mark-all-in-stock", {
+        method: "POST",
+        headers: { "X-Merchant-Key": merchantKey },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUploadMessage(`Marked ${data.changed} product(s) as In Stock (${data.total} total products).`);
+        logAction(`Marked all ${data.changed} products as In Stock`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to update stock status.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error updating stock status: ${err.message || err}`);
+    } finally {
+      setIsMarkingAllInStock(false);
+    }
+  };
+
+  // Bulk department reassignment for the main Inventory Management table —
+  // select several products, then move them all to one department at
+  // once instead of editing each product individually.
+  const [selectedInventoryIds, setSelectedInventoryIds] = useState<Set<string>>(new Set());
+  const [bulkDeptTarget, setBulkDeptTarget] = useState("");
+  const [isBulkChangingDept, setIsBulkChangingDept] = useState(false);
+
+  const toggleInventorySelection = (id: string) => {
+    setSelectedInventoryIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleBulkChangeDepartment = async () => {
+    if (selectedInventoryIds.size === 0 || !bulkDeptTarget) return;
+    setIsBulkChangingDept(true);
+    setUploadMessage(null);
+    try {
+      const res = await fetch("/api/products/bulk-set-category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ productIds: Array.from(selectedInventoryIds), category: bulkDeptTarget }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setUploadMessage(`Moved ${data.changed} product(s) to "${bulkDeptTarget}".`);
+        logAction(`Bulk-moved ${data.changed} products to department "${bulkDeptTarget}"`);
+        setSelectedInventoryIds(new Set());
+        setBulkDeptTarget("");
+        onRefreshAllData();
+      } else {
+        setUploadMessage(data.error || "Failed to change department.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error changing department: ${err.message || err}`);
+    } finally {
+      setIsBulkChangingDept(false);
+    }
+  };
+
   const parseCSV = (text: string) => {
     // Clean UTF-8 BOM
     text = text.replace(/^\ufeff/i, "").trim();
@@ -4466,6 +4541,16 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             </button>
             <button
               type="button"
+              onClick={handleMarkAllInStock}
+              disabled={isMarkingAllInStock || !products || products.length === 0}
+              className="px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 disabled:bg-gray-50 disabled:text-gray-400 border border-emerald-200/50 hover:border-emerald-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
+              title="Set every product's stock status to In Stock in one pass"
+            >
+              <CheckCircle className={`w-4 h-4`} />
+              {isMarkingAllInStock ? "Updating..." : "Mark All In Stock"}
+            </button>
+            <button
+              type="button"
               onClick={handleDeleteAllInventory}
               disabled={isDeletingAll || !products || products.length === 0}
               className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 disabled:bg-gray-50 disabled:text-gray-400 border border-rose-200/50 hover:border-rose-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
@@ -4477,7 +4562,35 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </div>
         </div>
 
-        {/* Filters */}
+        {/* Bulk Department Change — appears once products are selected */}
+        {selectedInventoryIds.size > 0 && (
+          <div className="flex flex-wrap items-center gap-3 bg-indigo-50 border border-indigo-200 rounded-xl p-4">
+            <span className="text-xs font-bold text-indigo-800">{selectedInventoryIds.size} selected</span>
+            <select
+              value={bulkDeptTarget}
+              onChange={(e) => setBulkDeptTarget(e.target.value)}
+              className="px-3 py-2 border border-indigo-200 rounded-lg text-xs cursor-pointer bg-white"
+            >
+              <option value="">Move to department...</option>
+              {uniqueCategories.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleBulkChangeDepartment}
+              disabled={!bulkDeptTarget || isBulkChangingDept}
+              className="px-4 py-2 bg-indigo-900 hover:bg-indigo-800 disabled:bg-gray-300 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+            >
+              {isBulkChangingDept ? "Moving..." : "Apply"}
+            </button>
+            <button
+              onClick={() => setSelectedInventoryIds(new Set())}
+              className="px-3 py-2 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+            >
+              Clear Selection
+            </button>
+          </div>
+        )}
         <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
           <div className="relative w-full md:max-w-sm">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -4560,6 +4673,18 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-100 text-[10px] uppercase font-bold text-slate-400 tracking-wider font-mono">
+                    <th className="py-3 px-4 w-10">
+                      <input
+                        type="checkbox"
+                        checked={filteredActiveProducts.length > 0 && selectedInventoryIds.size === filteredActiveProducts.length}
+                        onChange={() => {
+                          setSelectedInventoryIds((prev) =>
+                            prev.size === filteredActiveProducts.length ? new Set() : new Set(filteredActiveProducts.map((p) => p.id))
+                          );
+                        }}
+                        className="cursor-pointer"
+                      />
+                    </th>
                     <th className="py-3 px-4 w-16">Photo</th>
                     <th className="py-3 px-4">Product Name</th>
                     <th className="py-3 px-4">Category</th>
@@ -4576,6 +4701,14 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   {filteredActiveProducts.length > 0 ? (
                     filteredActiveProducts.map((product) => (
                       <tr key={product.id} className="hover:bg-slate-50/50 transition">
+                        <td className="py-3 px-4">
+                          <input
+                            type="checkbox"
+                            checked={selectedInventoryIds.has(product.id)}
+                            onChange={() => toggleInventorySelection(product.id)}
+                            className="cursor-pointer"
+                          />
+                        </td>
                         <td className="py-3 px-4">
                           <div className="w-10 h-10 rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center overflow-hidden shrink-0">
                             {(product as any).imageUrl ? (
@@ -4720,7 +4853,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={10} className="py-8 text-center text-gray-400 font-light">
+                      <td colSpan={11} className="py-8 text-center text-gray-400 font-light">
                         No active stock matching your search filters.
                       </td>
                     </tr>
