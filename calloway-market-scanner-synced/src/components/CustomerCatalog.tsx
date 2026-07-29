@@ -236,21 +236,21 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
       .catch(() => {});
   }, []);
 
-  const [signupPhone, setSignupPhone] = useState("");
+  const [signupEmail, setSignupEmail] = useState("");
   const [signupStatus, setSignupStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [signupCouponCode, setSignupCouponCode] = useState("");
   const [signupErrorMsg, setSignupErrorMsg] = useState("");
 
-  const handleSmsSignup = async (e: React.FormEvent) => {
+  const handleEmailSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!signupPhone.trim()) return;
+    if (!signupEmail.trim()) return;
     setSignupStatus("loading");
     setSignupErrorMsg("");
     try {
-      const res = await fetch("/api/sms-signup", {
+      const res = await fetch("/api/email-signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: signupPhone.trim() }),
+        body: JSON.stringify({ email: signupEmail.trim() }),
       });
       const data = await res.json();
       if (res.ok && data.couponCode) {
@@ -549,6 +549,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
             loop
             playsInline
             className={`absolute inset-0 w-full h-full ${promo.imageFit === "contain" ? "object-contain bg-gray-900" : "object-cover"}`}
+            onError={(e) => { (e.target as HTMLVideoElement).style.display = "none"; }}
           />
         ) : promo.mediaUrl ? (
           <img
@@ -717,16 +718,16 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                   </p>
                 </div>
               ) : (
-                <form onSubmit={handleSmsSignup} className="space-y-3">
+                <form onSubmit={handleEmailSignup} className="space-y-3">
                   <h2 className="text-xl font-extrabold leading-snug">Get 10% Off<br/>Your Next Visit</h2>
-                  <p className="text-white/60 text-xs">Enter your phone number for an instant coupon code by text.</p>
+                  <p className="text-white/60 text-xs">Enter your email for an instant coupon code.</p>
                   <div className="flex gap-2">
                     <input
-                      type="tel"
+                      type="email"
                       required
-                      placeholder="(555) 123-4567"
-                      value={signupPhone}
-                      onChange={(e) => setSignupPhone(e.target.value)}
+                      placeholder="you@email.com"
+                      value={signupEmail}
+                      onChange={(e) => setSignupEmail(e.target.value)}
                       disabled={signupStatus === "loading"}
                       className="flex-1 px-4 py-2.5 bg-white/10 border border-white/20 rounded-full text-white placeholder-white/40 text-sm focus:outline-none focus:ring-2 focus:ring-[#E4002B]/50"
                     />
@@ -738,9 +739,6 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                       {signupStatus === "loading" ? "..." : "Get Code"}
                     </button>
                   </div>
-                  <p className="text-white/40 text-[10px] leading-snug">
-                    By submitting, you agree to receive text messages from Calloway Market, including occasional promotions. Msg &amp; data rates may apply. Reply STOP to unsubscribe.
-                  </p>
                   {signupStatus === "error" && <p className="text-rose-300 text-xs">{signupErrorMsg}</p>}
                 </form>
               )}
