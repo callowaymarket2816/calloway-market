@@ -204,9 +204,9 @@ export default function App() {
   };
 
   return (
-    <div className={`min-h-screen flex flex-col font-sans ${viewMode === "merchant" ? "bg-[#0C0B0A] text-[#F4F1ED]" : "bg-white text-gray-900"}`}>
+    <div className="min-h-screen bg-white text-gray-900 flex flex-col font-sans">
       {/* Universal Top Nav */}
-      <header className={`sticky top-0 z-40 shadow-xs border-b ${viewMode === "merchant" ? "bg-[#0C0B0A] border-[#F4F1ED]/10" : "bg-white border-gray-200"}`}>
+      <header className="sticky top-0 z-40 shadow-xs border-b bg-white border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-20">
             {/* Elegant Store Branding - Click circle 3 times or double click to trigger modal */}
@@ -298,25 +298,25 @@ export default function App() {
       </main>
 
       {/* Real Store Info Footer */}
-      <footer className={`border-t py-8 font-light ${viewMode === "merchant" ? "bg-[#0C0B0A] border-[#F4F1ED]/10 text-[#F4F1ED]/60" : "bg-white border-gray-200 text-gray-500"}`}>
+      <footer className="border-t py-8 font-light bg-white border-gray-200 text-gray-500">
         <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
           <div className="flex items-start gap-2.5">
-            <MapPin className={`w-4 h-4 mt-0.5 shrink-0 ${viewMode === "merchant" ? "text-[#C4A484]" : "text-amber-800"}`} />
+            <MapPin className="w-4 h-4 mt-0.5 shrink-0 text-amber-800" />
             <span>2816 Calloway Dr, Unit 100<br />Bakersfield, CA 93312</span>
           </div>
           <div className="flex items-start gap-2.5">
-            <Phone className={`w-4 h-4 mt-0.5 shrink-0 ${viewMode === "merchant" ? "text-[#C4A484]" : "text-amber-800"}`} />
-            <a href="tel:+16618296889" className={`transition ${viewMode === "merchant" ? "hover:text-[#C4A484]" : "hover:text-amber-800"}`}>(661) 829-6889</a>
+            <Phone className="w-4 h-4 mt-0.5 shrink-0 text-amber-800" />
+            <a href="tel:+16618296889" className="transition hover:text-amber-800">(661) 829-6889</a>
           </div>
           <div className="flex items-start gap-2.5">
-            <Clock className={`w-4 h-4 mt-0.5 shrink-0 ${viewMode === "merchant" ? "text-[#C4A484]" : "text-amber-800"}`} />
+            <Clock className="w-4 h-4 mt-0.5 shrink-0 text-amber-800" />
             <span>Mon–Thu: 6AM–12AM<br />Fri–Sat: 6AM–2AM<br />Sun: 7AM–11PM</span>
           </div>
         </div>
-        <div className={`max-w-7xl mx-auto px-4 mt-6 pt-6 border-t text-center text-xs ${viewMode === "merchant" ? "border-[#F4F1ED]/10" : "border-gray-200"}`}>
+        <div className="max-w-7xl mx-auto px-4 mt-6 pt-6 border-t text-center text-xs border-gray-200">
           <div 
             onClick={() => setIsPasscodeModalOpen(true)}
-            className={`cursor-pointer transition active:scale-98 font-medium inline-block ${viewMode === "merchant" ? "hover:text-[#C4A484]" : "hover:text-amber-800"}`}
+            className="cursor-pointer transition active:scale-98 font-medium inline-block hover:text-amber-800"
             title="Merchant Login"
           >
             <span>© 2026 Calloway Market.</span>
