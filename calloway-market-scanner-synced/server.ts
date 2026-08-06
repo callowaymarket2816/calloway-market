@@ -958,6 +958,44 @@ app.patch("/api/products/:id", requireMerchantAuth, async (req, res) => {
 // Sets every product's stock status to "In Stock" in one pass — for when
 // going through hundreds of products individually to fix stock status
 // isn't realistic. Single read, single write.
+// Fills in missing "size" values by extracting a volume/pack token
+// directly from the product's own name (e.g. "TITO'S VODKA 750ML" ->
+// "750ML", "BUD LIGHT 24 PK" -> "24 PK"). Only touches products that
+// currently have no size at all — never overwrites an existing value.
+// Products with no recognizable size pattern in their name are simply
+// left as-is (nothing to extract).
+const SIZE_PATTERN = /(\d+(?:\.\d*)?\s?(?:FL\.?\s?OZ|OZ|ML|LTR|L|GAL|GL)\b|\d+\s?PK(?:\s?C(?:AN)?S?)?\b|\d+\s?CT\b|GALLON)/i;
+function extractSizeFromName(name: string): string {
+  const match = SIZE_PATTERN.exec(name || "");
+  if (!match) return "";
+  return match[1].trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+app.post("/api/products/fill-missing-sizes", requireMerchantAuth, async (req, res) => {
+  try {
+    const freshProducts = await loadProductsFromDisk();
+    let filled = 0;
+    let stillMissing = 0;
+    for (const p of freshProducts) {
+      if (!p.size || !String(p.size).trim()) {
+        const extracted = extractSizeFromName(p.name);
+        if (extracted) {
+          p.size = extracted;
+          filled++;
+        } else {
+          stillMissing++;
+        }
+      }
+    }
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, filled, stillMissing, total: freshProducts.length });
+  } catch (err: any) {
+    console.error("Fill missing sizes failed:", err);
+    res.status(500).json({ error: err.message || "Failed to fill in sizes." });
+  }
+});
+
 app.post("/api/products/mark-all-in-stock", requireMerchantAuth, async (req, res) => {
   try {
     const freshProducts = await loadProductsFromDisk();
@@ -2072,6 +2110,7 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
     }
 
     const priceChanges: any[] = [];
+    const missingPrices: any[] = [];
     const newProducts: any[] = [];
 
     for (const sp of scannerProducts) {
@@ -2079,9 +2118,27 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
       const key = normalize(sp.upc);
       const existing = byUpc.get(key);
       if (existing) {
-        const currentPrice = Number((existing as any).price);
+        const rawCurrentPrice = (existing as any).price;
+        const currentPrice = Number(rawCurrentPrice);
         const scannerPrice = Number(sp.price);
-        if (!isNaN(scannerPrice) && scannerPrice !== currentPrice) {
+        if (isNaN(scannerPrice)) continue; // scanner itself has no usable price for this item
+
+        const hasNoCurrentPrice = rawCurrentPrice === undefined || rawCurrentPrice === null || isNaN(currentPrice);
+        if (hasNoCurrentPrice) {
+          // Distinct from a price CHANGE — this product has no price on
+          // the live site at all yet, so there's nothing to compare
+          // against, just a gap to fill.
+          const dismissedAtPrice = dismissed.priceDismissed[key];
+          if (dismissedAtPrice === scannerPrice) continue;
+          missingPrices.push({
+            upc: sp.upc,
+            productId: existing.id,
+            name: existing.name,
+            category: existing.category,
+            newPrice: scannerPrice,
+            recentlyActive: isRecentlyActive(sp.id),
+          });
+        } else if (scannerPrice !== currentPrice) {
           const dismissedAtPrice = dismissed.priceDismissed[key];
           if (dismissedAtPrice === scannerPrice) continue; // already reviewed this exact price, don't re-nag
           priceChanges.push({
@@ -2107,7 +2164,7 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
       }
     }
 
-    res.json({ priceChanges, newProducts, totalScannerProducts: scannerProducts.length });
+    res.json({ priceChanges, missingPrices, newProducts, totalScannerProducts: scannerProducts.length });
   } catch (err: any) {
     console.error("Stockroom sync check failed:", err);
     res.status(500).json({ error: err.message || "Failed to check stockroom scanner." });
