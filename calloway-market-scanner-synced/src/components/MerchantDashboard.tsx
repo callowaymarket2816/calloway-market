@@ -315,6 +315,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // review each one before anything goes live. See state/handlers below,
   // wired to the "Stockroom Sync" panel further down.
   const [stockroomPriceChanges, setStockroomPriceChanges] = useState<any[]>([]);
+  const [stockroomMissingPrices, setStockroomMissingPrices] = useState<any[]>([]);
   const [stockroomNewProducts, setStockroomNewProducts] = useState<any[]>([]);
   const [isCheckingStockroom, setIsCheckingStockroom] = useState(false);
   const [stockroomCheckedOnce, setStockroomCheckedOnce] = useState(false);
@@ -325,24 +326,37 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // one department at a time (e.g. just "Beer") and act on several items
   // at once instead of one-by-one.
   const [stockroomDeptFilter, setStockroomDeptFilter] = useState("All");
+  const [showOnlyPriceIncreases, setShowOnlyPriceIncreases] = useState(false);
+  const [hideStaleProducts, setHideStaleProducts] = useState(true);
   const [selectedPriceChangeUpcs, setSelectedPriceChangeUpcs] = useState<Set<string>>(new Set());
+  const [selectedMissingPriceUpcs, setSelectedMissingPriceUpcs] = useState<Set<string>>(new Set());
   const [selectedNewProductUpcs, setSelectedNewProductUpcs] = useState<Set<string>>(new Set());
   const [isBulkActingStockroom, setIsBulkActingStockroom] = useState(false);
 
   const stockroomDepartments = Array.from(
     new Set(
-      [...stockroomPriceChanges, ...stockroomNewProducts]
+      [...stockroomPriceChanges, ...stockroomMissingPrices, ...stockroomNewProducts]
         .map((item) => (item.category || "Uncategorized").trim())
         .filter(Boolean)
     )
   ).sort();
 
-  const filteredPriceChanges = stockroomPriceChanges.filter(
-    (c) => stockroomDeptFilter === "All" || (c.category || "Uncategorized") === stockroomDeptFilter
-  );
-  const filteredNewProducts = stockroomNewProducts.filter(
-    (p) => stockroomDeptFilter === "All" || (p.category || "Uncategorized") === stockroomDeptFilter
-  );
+  const filteredPriceChanges = stockroomPriceChanges.filter((c) => {
+    const matchesDept = stockroomDeptFilter === "All" || (c.category || "Uncategorized") === stockroomDeptFilter;
+    const matchesDirection = !showOnlyPriceIncreases || Number(c.newPrice) > Number(c.currentPrice);
+    const matchesActivity = !hideStaleProducts || c.recentlyActive !== false;
+    return matchesDept && matchesDirection && matchesActivity;
+  });
+  const filteredMissingPrices = stockroomMissingPrices.filter((c) => {
+    const matchesDept = stockroomDeptFilter === "All" || (c.category || "Uncategorized") === stockroomDeptFilter;
+    const matchesActivity = !hideStaleProducts || c.recentlyActive !== false;
+    return matchesDept && matchesActivity;
+  });
+  const filteredNewProducts = stockroomNewProducts.filter((p) => {
+    const matchesDept = stockroomDeptFilter === "All" || (p.category || "Uncategorized") === stockroomDeptFilter;
+    const matchesActivity = !hideStaleProducts || p.recentlyActive !== false;
+    return matchesDept && matchesActivity;
+  });
 
   const togglePriceChangeSelection = (upc: string) => {
     setSelectedPriceChangeUpcs((prev) => {
@@ -400,6 +414,110 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       setIsBulkActingStockroom(false);
     }
   };
+  const toggleMissingPriceSelection = (upc: string) => {
+    setSelectedMissingPriceUpcs((prev) => {
+      const next = new Set(prev);
+      if (next.has(upc)) next.delete(upc);
+      else next.add(upc);
+      return next;
+    });
+  };
+  const toggleSelectAllMissingPrices = () => {
+    setSelectedMissingPriceUpcs((prev) =>
+      prev.size === filteredMissingPrices.length ? new Set() : new Set(filteredMissingPrices.map((c) => c.upc))
+    );
+  };
+
+  const handleBulkPushMissingPrices = async () => {
+    const toPush = stockroomMissingPrices.filter((c) => selectedMissingPriceUpcs.has(c.upc));
+    if (toPush.length === 0) return;
+    setIsBulkActingStockroom(true);
+    try {
+      const res = await fetch("/api/stockroom-sync/bulk-push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({
+          type: "price",
+          items: toPush.map((c) => ({ productId: c.productId, price: c.newPrice, name: c.name })),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setStockroomMissingPrices((prev) => prev.filter((c) => !selectedMissingPriceUpcs.has(c.upc)));
+        setSelectedMissingPriceUpcs(new Set());
+        setUploadMessage(`Set price for ${data.applied} product(s).${data.errors?.length ? " Some were skipped — check details." : ""}`);
+        logAction(`Stockroom sync: bulk-filled ${data.applied} missing prices`);
+        onRefreshAllData();
+      } else {
+        setUploadMessage(data.error || "Failed to set prices.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error setting prices: ${err.message || err}`);
+    } finally {
+      setIsBulkActingStockroom(false);
+    }
+  };
+  const handleBulkDismissMissingPrices = async () => {
+    const toDismiss = stockroomMissingPrices.filter((c) => selectedMissingPriceUpcs.has(c.upc));
+    if (toDismiss.length === 0) return;
+    setIsBulkActingStockroom(true);
+    try {
+      await fetch("/api/stockroom-sync/bulk-dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({
+          type: "price",
+          items: toDismiss.map((c) => ({ upc: c.upc, price: c.newPrice })),
+        }),
+      });
+      setStockroomMissingPrices((prev) => prev.filter((c) => !selectedMissingPriceUpcs.has(c.upc)));
+      setSelectedMissingPriceUpcs(new Set());
+    } catch (err: any) {
+      setUploadMessage(`Error dismissing: ${err.message || err}`);
+    } finally {
+      setIsBulkActingStockroom(false);
+    }
+  };
+
+  const handlePushMissingPrice = async (change: any) => {
+    setStockroomActionId(change.upc);
+    try {
+      const res = await fetch("/api/stockroom-sync/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ type: "price", productId: change.productId, price: change.newPrice }),
+      });
+      if (res.ok) {
+        setStockroomMissingPrices((prev) => prev.filter((c) => c.upc !== change.upc));
+        logAction(`Stockroom sync: set price for "${change.name}" to $${Number(change.newPrice).toFixed(2)}`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to set price.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error setting price: ${err.message || err}`);
+    } finally {
+      setStockroomActionId(null);
+    }
+  };
+
+  const handleDismissMissingPrice = async (change: any) => {
+    setStockroomActionId(change.upc);
+    try {
+      await fetch("/api/stockroom-sync/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ type: "price", upc: change.upc, price: change.newPrice }),
+      });
+      setStockroomMissingPrices((prev) => prev.filter((c) => c.upc !== change.upc));
+    } catch (err: any) {
+      setUploadMessage(`Error dismissing: ${err.message || err}`);
+    } finally {
+      setStockroomActionId(null);
+    }
+  };
+
   const handleBulkDismissPriceChanges = async () => {
     const toDismiss = stockroomPriceChanges.filter((c) => selectedPriceChangeUpcs.has(c.upc));
     if (toDismiss.length === 0) return;
@@ -477,12 +595,14 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     setUploadMessage(null);
     setStockroomDeptFilter("All");
     setSelectedPriceChangeUpcs(new Set());
+    setSelectedMissingPriceUpcs(new Set());
     setSelectedNewProductUpcs(new Set());
     try {
       const res = await fetch("/api/stockroom-sync/check", { headers: { "X-Merchant-Key": merchantKey } });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setStockroomPriceChanges(data.priceChanges || []);
+        setStockroomMissingPrices(data.missingPrices || []);
         setStockroomNewProducts(data.newProducts || []);
         setStockroomCheckedOnce(true);
       } else {
@@ -1112,6 +1232,40 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       setUploadMessage(`Error updating stock status: ${err.message || err}`);
     } finally {
       setIsMarkingAllInStock(false);
+    }
+  };
+
+  const [isFillingMissingSizes, setIsFillingMissingSizes] = useState(false);
+  const handleFillMissingSizes = async () => {
+    if (
+      !window.confirm(
+        "This fills in the size field for any product missing one, by pulling it out of the product's own name (e.g. \"TITO'S VODKA 750ML\" \u2192 750ML). Products with no recognizable size in their name are left alone. Continue?"
+      )
+    ) {
+      return;
+    }
+    setIsFillingMissingSizes(true);
+    setUploadMessage(null);
+    try {
+      const res = await fetch("/api/products/fill-missing-sizes", {
+        method: "POST",
+        headers: { "X-Merchant-Key": merchantKey },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUploadMessage(
+          `Filled in size for ${data.filled} product(s). ${data.stillMissing} product(s) still have no size — their name didn't have a recognizable size pattern.`
+        );
+        logAction(`Filled in missing sizes for ${data.filled} products`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to fill in sizes.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error filling in sizes: ${err.message || err}`);
+    } finally {
+      setIsFillingMissingSizes(false);
     }
   };
 
@@ -4216,25 +4370,47 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </div>
         </div>
 
-        {stockroomCheckedOnce && stockroomPriceChanges.length === 0 && stockroomNewProducts.length === 0 && (
+        {stockroomCheckedOnce && stockroomPriceChanges.length === 0 && stockroomMissingPrices.length === 0 && stockroomNewProducts.length === 0 && (
           <p className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
             ✓ Everything's in sync — no price changes or new products waiting for review.
           </p>
         )}
 
         {(stockroomPriceChanges.length > 0 || stockroomNewProducts.length > 0) && (
-          <div className="flex items-center gap-2">
-            <label className="text-[10px] uppercase font-bold text-gray-500 tracking-wider shrink-0">Department</label>
-            <select
-              value={stockroomDeptFilter}
-              onChange={(e) => setStockroomDeptFilter(e.target.value)}
-              className="px-3 py-2 border border-gray-200 rounded-lg text-xs cursor-pointer"
-            >
-              <option value="All">All Departments</option>
-              {stockroomDepartments.map((dept) => (
-                <option key={dept} value={dept}>{dept}</option>
-              ))}
-            </select>
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] uppercase font-bold text-gray-500 tracking-wider shrink-0">Department</label>
+              <select
+                value={stockroomDeptFilter}
+                onChange={(e) => setStockroomDeptFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-200 rounded-lg text-xs cursor-pointer"
+              >
+                <option value="All">All Departments</option>
+                {stockroomDepartments.map((dept) => (
+                  <option key={dept} value={dept}>{dept}</option>
+                ))}
+              </select>
+            </div>
+            {stockroomPriceChanges.length > 0 && (
+              <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showOnlyPriceIncreases}
+                  onChange={(e) => setShowOnlyPriceIncreases(e.target.checked)}
+                  className="cursor-pointer"
+                />
+                Only show price increases (scanner price higher than website)
+              </label>
+            )}
+            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hideStaleProducts}
+                onChange={(e) => setHideStaleProducts(e.target.checked)}
+                className="cursor-pointer"
+              />
+              Hide products not carried in the last 4 weeks
+            </label>
           </div>
         )}
 
@@ -4296,6 +4472,70 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   className="px-3 py-2 bg-indigo-900 hover:bg-indigo-800 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer shrink-0"
                 >
                   Push Live
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {filteredMissingPrices.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedMissingPriceUpcs.size === filteredMissingPrices.length && filteredMissingPrices.length > 0}
+                  onChange={toggleSelectAllMissingPrices}
+                  className="cursor-pointer"
+                />
+                Missing Prices ({filteredMissingPrices.length})
+              </label>
+              {selectedMissingPriceUpcs.size > 0 && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleBulkDismissMissingPrices}
+                    disabled={isBulkActingStockroom}
+                    className="px-3 py-1.5 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    Discard {selectedMissingPriceUpcs.size}
+                  </button>
+                  <button
+                    onClick={handleBulkPushMissingPrices}
+                    disabled={isBulkActingStockroom}
+                    className="px-3 py-1.5 bg-amber-800 hover:bg-amber-900 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    {isBulkActingStockroom ? "Setting..." : `Set Price for ${selectedMissingPriceUpcs.size}`}
+                  </button>
+                </div>
+              )}
+            </div>
+            {filteredMissingPrices.map((change) => (
+              <div key={change.upc} className="flex items-center gap-3 border border-amber-100 bg-amber-50/40 rounded-xl p-3">
+                <input
+                  type="checkbox"
+                  checked={selectedMissingPriceUpcs.has(change.upc)}
+                  onChange={() => toggleMissingPriceSelection(change.upc)}
+                  className="cursor-pointer shrink-0"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate">{change.name}</p>
+                  <p className="text-xs text-gray-500">
+                    {change.category || "Uncategorized"} · No price set → <span className="font-bold text-amber-800">${Number(change.newPrice).toFixed(2)}</span>
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleDismissMissingPrice(change)}
+                  disabled={stockroomActionId === change.upc}
+                  className="px-3 py-2 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer shrink-0"
+                >
+                  Discard
+                </button>
+                <button
+                  onClick={() => handlePushMissingPrice(change)}
+                  disabled={stockroomActionId === change.upc}
+                  className="px-3 py-2 bg-amber-800 hover:bg-amber-900 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer shrink-0"
+                >
+                  Set Price
                 </button>
               </div>
             ))}
@@ -4548,6 +4788,16 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
             >
               <CheckCircle className={`w-4 h-4`} />
               {isMarkingAllInStock ? "Updating..." : "Mark All In Stock"}
+            </button>
+            <button
+              type="button"
+              onClick={handleFillMissingSizes}
+              disabled={isFillingMissingSizes || !products || products.length === 0}
+              className="px-4 py-2.5 bg-sky-50 hover:bg-sky-100 text-sky-700 disabled:bg-gray-50 disabled:text-gray-400 border border-sky-200/50 hover:border-sky-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
+              title="Fill in missing size values by extracting them from each product's own name"
+            >
+              <RefreshCw className="w-4 h-4" />
+              {isFillingMissingSizes ? "Filling..." : "Fill Missing Sizes"}
             </button>
             <button
               type="button"
