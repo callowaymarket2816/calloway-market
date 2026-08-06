@@ -327,7 +327,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // at once instead of one-by-one.
   const [stockroomDeptFilter, setStockroomDeptFilter] = useState("All");
   const [showOnlyPriceIncreases, setShowOnlyPriceIncreases] = useState(false);
-  const [hideStaleProducts, setHideStaleProducts] = useState(true);
+  const [hideStaleProducts, setHideStaleProducts] = useState(false);
   const [selectedPriceChangeUpcs, setSelectedPriceChangeUpcs] = useState<Set<string>>(new Set());
   const [selectedMissingPriceUpcs, setSelectedMissingPriceUpcs] = useState<Set<string>>(new Set());
   const [selectedNewProductUpcs, setSelectedNewProductUpcs] = useState<Set<string>>(new Set());
@@ -4758,58 +4758,59 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               Browse, search, delete individual items, or securely wipe all live products from the customer database.
             </p>
           </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <button
-              type="button"
-              onClick={handleRecategorizeAll}
-              disabled={isRecategorizing || !products || products.length === 0}
-              className="px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 disabled:bg-gray-50 disabled:text-gray-400 border border-indigo-200/50 hover:border-indigo-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
-              title="Re-sort existing products (e.g. generic 'Liquor') into their correct specific department (Whiskey, Tequila, Rum, etc.) without re-uploading anything"
-            >
-              <RefreshCw className={`w-4 h-4 ${isRecategorizing ? "animate-spin" : ""}`} />
-              {isRecategorizing ? "Fixing..." : "Fix Existing Categories"}
-            </button>
-            <button
-              type="button"
-              onClick={handleMergeDuplicateDepartments}
-              disabled={isMergingDepartments || !products || products.length === 0}
-              className="px-4 py-2.5 bg-purple-50 hover:bg-purple-100 text-purple-700 disabled:bg-gray-50 disabled:text-gray-400 border border-purple-200/50 hover:border-purple-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
-              title="Merge departments that only differ by typo, spacing, or capitalization (e.g. 'Beer' vs 'beer ') into one"
-            >
-              <RefreshCw className={`w-4 h-4 ${isMergingDepartments ? "animate-spin" : ""}`} />
-              {isMergingDepartments ? "Merging..." : "Merge Duplicate Departments"}
-            </button>
-            <button
-              type="button"
-              onClick={handleMarkAllInStock}
-              disabled={isMarkingAllInStock || !products || products.length === 0}
-              className="px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 disabled:bg-gray-50 disabled:text-gray-400 border border-emerald-200/50 hover:border-emerald-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
-              title="Set every product's stock status to In Stock in one pass"
-            >
-              <CheckCircle className={`w-4 h-4`} />
-              {isMarkingAllInStock ? "Updating..." : "Mark All In Stock"}
-            </button>
-            <button
-              type="button"
-              onClick={handleFillMissingSizes}
-              disabled={isFillingMissingSizes || !products || products.length === 0}
-              className="px-4 py-2.5 bg-sky-50 hover:bg-sky-100 text-sky-700 disabled:bg-gray-50 disabled:text-gray-400 border border-sky-200/50 hover:border-sky-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
-              title="Fill in missing size values by extracting them from each product's own name"
-            >
-              <RefreshCw className="w-4 h-4" />
-              {isFillingMissingSizes ? "Filling..." : "Fill Missing Sizes"}
-            </button>
-            <button
-              type="button"
-              onClick={handleDeleteAllInventory}
-              disabled={isDeletingAll || !products || products.length === 0}
-              className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 disabled:bg-gray-50 disabled:text-gray-400 border border-rose-200/50 hover:border-rose-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
-              title="Delete all products from the live database"
-            >
-              <Trash2 className="w-4 h-4" />
-              {isDeletingAll ? "Clearing..." : "Delete All Inventory"}
-            </button>
-          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={handleRecategorizeAll}
+            disabled={isRecategorizing || !products || products.length === 0}
+            className="px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 disabled:bg-gray-50 disabled:text-gray-400 border border-indigo-200/50 hover:border-indigo-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
+            title="Re-sort existing products (e.g. generic 'Liquor') into their correct specific department (Whiskey, Tequila, Rum, etc.) without re-uploading anything"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRecategorizing ? "animate-spin" : ""}`} />
+            {isRecategorizing ? "Fixing..." : "Fix Existing Categories"}
+          </button>
+          <button
+            type="button"
+            onClick={handleMergeDuplicateDepartments}
+            disabled={isMergingDepartments || !products || products.length === 0}
+            className="px-4 py-2.5 bg-purple-50 hover:bg-purple-100 text-purple-700 disabled:bg-gray-50 disabled:text-gray-400 border border-purple-200/50 hover:border-purple-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
+            title="Merge departments that only differ by typo, spacing, or capitalization (e.g. 'Beer' vs 'beer ') into one"
+          >
+            <RefreshCw className={`w-4 h-4 ${isMergingDepartments ? "animate-spin" : ""}`} />
+            {isMergingDepartments ? "Merging..." : "Merge Duplicate Departments"}
+          </button>
+          <button
+            type="button"
+            onClick={handleMarkAllInStock}
+            disabled={isMarkingAllInStock || !products || products.length === 0}
+            className="px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 disabled:bg-gray-50 disabled:text-gray-400 border border-emerald-200/50 hover:border-emerald-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
+            title="Set every product's stock status to In Stock in one pass"
+          >
+            <CheckCircle className={`w-4 h-4`} />
+            {isMarkingAllInStock ? "Updating..." : "Mark All In Stock"}
+          </button>
+          <button
+            type="button"
+            onClick={handleFillMissingSizes}
+            disabled={isFillingMissingSizes || !products || products.length === 0}
+            className="px-4 py-2.5 bg-sky-50 hover:bg-sky-100 text-sky-700 disabled:bg-gray-50 disabled:text-gray-400 border border-sky-200/50 hover:border-sky-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
+            title="Fill in missing size values by extracting them from each product's own name"
+          >
+            <RefreshCw className="w-4 h-4" />
+            {isFillingMissingSizes ? "Filling..." : "Fill Missing Sizes"}
+          </button>
+          <button
+            type="button"
+            onClick={handleDeleteAllInventory}
+            disabled={isDeletingAll || !products || products.length === 0}
+            className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 disabled:bg-gray-50 disabled:text-gray-400 border border-rose-200/50 hover:border-rose-200 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-xs"
+            title="Delete all products from the live database"
+          >
+            <Trash2 className="w-4 h-4" />
+            {isDeletingAll ? "Clearing..." : "Delete All Inventory"}
+          </button>
         </div>
 
         {/* Bulk Department Change — appears once products are selected */}
