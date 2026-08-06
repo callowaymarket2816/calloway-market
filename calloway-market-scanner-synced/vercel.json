@@ -3,6 +3,8 @@
   "outputDirectory": "vercel_output",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/product/(.*)", "destination": "/api/index" },
+    { "source": "/sitemap.xml", "destination": "/api/index" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "crons": [
