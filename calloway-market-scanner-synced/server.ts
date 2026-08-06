@@ -2077,9 +2077,18 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
     const allWeeks: string[] = Array.isArray(stateRow?.data?.weeks) ? stateRow.data.weeks : [];
     const weekEntries = stateRow?.data?.entries || {};
     const recentWeeks = allWeeks.slice(-RECENT_WEEKS_COUNT);
+    // Guards against a label mismatch (e.g. the "weeks" list uses a
+    // different string format than the actual keys in "entries") quietly
+    // hiding every single product — if none of the "recent" week labels
+    // actually exist as keys in the entries data at all, that's a sign
+    // something doesn't line up, so nothing gets hidden rather than
+    // everything.
+    const recentWeeksWithData = recentWeeks.filter(
+      (w) => weekEntries && Object.prototype.hasOwnProperty.call(weekEntries, w)
+    );
     const isRecentlyActive = (scannerId: string): boolean => {
-      if (!scannerId || recentWeeks.length === 0) return true; // no weekly data to judge by — don't hide anything
-      for (const week of recentWeeks) {
+      if (!scannerId || recentWeeksWithData.length === 0) return true;
+      for (const week of recentWeeksWithData) {
         const entry = weekEntries?.[week]?.[scannerId];
         if (entry && ((entry.onHand && entry.onHand > 0) || (entry.received && entry.received > 0))) {
           return true;
