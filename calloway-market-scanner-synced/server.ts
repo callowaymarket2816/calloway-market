@@ -607,6 +607,18 @@ let searchQueries: SearchQuery[] = [];
 
 let currentProducts: Product[] = [...PRODUCTS];
 
+// Basic HTML-escaping for values pulled from product data before they get
+// dropped into a raw HTML string below (product names, descriptions, etc.
+// are merchant/scanner-entered text, not hardcoded, so this matters).
+function escapeHtml(str: string): string {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 function extractBrand(query: string): string {
   const queryLower = query.toLowerCase();
   const knownBrands = [
@@ -2017,6 +2029,27 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
       return res.json({ priceChanges: [], newProducts: [], totalScannerProducts: 0 });
     }
 
+    // The scanner tracks received/on-hand quantity per product per week —
+    // used here to tell apart products still actually being carried from
+    // ones that just happen to still exist in the data but haven't been
+    // restocked or had any on-hand quantity in a while. Looks at the last
+    // few weeks only (weeks are stored in chronological order, so the tail
+    // end is the most recent).
+    const RECENT_WEEKS_COUNT = 4;
+    const allWeeks: string[] = Array.isArray(stateRow?.data?.weeks) ? stateRow.data.weeks : [];
+    const weekEntries = stateRow?.data?.entries || {};
+    const recentWeeks = allWeeks.slice(-RECENT_WEEKS_COUNT);
+    const isRecentlyActive = (scannerId: string): boolean => {
+      if (!scannerId || recentWeeks.length === 0) return true; // no weekly data to judge by — don't hide anything
+      for (const week of recentWeeks) {
+        const entry = weekEntries?.[week]?.[scannerId];
+        if (entry && ((entry.onHand && entry.onHand > 0) || (entry.received && entry.received > 0))) {
+          return true;
+        }
+      }
+      return false;
+    };
+
     const normalize = (upc: string) => String(upc || "").replace(/^0+/, "");
 
     const freshProducts = await loadProductsFromDisk();
@@ -2058,6 +2091,7 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
             category: existing.category,
             currentPrice,
             newPrice: scannerPrice,
+            recentlyActive: isRecentlyActive(sp.id),
           });
         }
       } else {
@@ -2068,6 +2102,7 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
           category: sp.category || "",
           price: sp.price ?? "",
           cost: sp.cost ?? undefined,
+          recentlyActive: isRecentlyActive(sp.id),
         });
       }
     }
@@ -2723,6 +2758,110 @@ app.use(async (req, res, next) => {
   next();
 });
 
+function escapeHtml(str: string): string {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Gives each product a real, crawlable page instead of an empty shell.
+// The site is a client-rendered React app, so a plain visit to any URL
+// normally returns near-empty HTML (just a `<div id="root">`) with
+// everything filled in by JavaScript afterward — search engines don't
+// reliably wait for that, which is why individual products were never
+// showing up properly in Google. This route fetches the site's own real,
+// currently-built index.html (so it always has the correct hashed
+// asset filenames, whatever the latest deploy is) and injects real
+// title/description/visible content for that specific product into it
+// before sending it out. A real visitor's browser still loads the exact
+// same JS bundle afterward and the full interactive site takes over
+// normally — this only changes what's present before JavaScript runs.
+app.get("/product/:id/:slug?", async (req, res) => {
+  try {
+    const product = currentProducts.find((p) => p.id === req.params.id);
+    const origin = `${req.protocol}://${req.get("host")}`;
+    const templateRes = await fetch(`${origin}/index.html`);
+    let html = await templateRes.text();
+
+    if (product) {
+      const priceText = product.price ? `$${Number(product.price).toFixed(2)}` : "Call for price";
+      const title = `${product.name} | Calloway Market`;
+      const descriptionRaw = `${product.name}${product.size ? ` (${product.size})` : ""} — ${priceText} at Calloway Market, Bakersfield, CA. ${product.description || ""}`.trim();
+      const description = descriptionRaw.slice(0, 300);
+      const pageUrl = `${origin}/product/${product.id}/${req.params.slug || ""}`;
+
+      html = html.replace(/<title>.*?<\/title>/s, `<title>${escapeHtml(title)}</title>`);
+      if (html.includes('<meta name="description"')) {
+        html = html.replace(/<meta name="description" content=".*?"\s*\/>/s, `<meta name="description" content="${escapeHtml(description)}" />`);
+      } else {
+        html = html.replace("</title>", `</title>\n    <meta name="description" content="${escapeHtml(description)}" />`);
+      }
+      if (html.includes('property="og:title"')) {
+        html = html.replace(/<meta property="og:title" content=".*?"\s*\/>/s, `<meta property="og:title" content="${escapeHtml(title)}" />`);
+      }
+      if (html.includes('property="og:description"')) {
+        html = html.replace(/<meta property="og:description" content=".*?"\s*\/>/s, `<meta property="og:description" content="${escapeHtml(description)}" />`);
+      }
+      if (html.includes('property="og:url"')) {
+        html = html.replace(/<meta property="og:url" content=".*?"\s*\/>/s, `<meta property="og:url" content="${escapeHtml(pageUrl)}" />`);
+      }
+
+      // Real, visible content for crawlers (and anyone with JS disabled) —
+      // React replaces this div's contents the moment it mounts, so a
+      // normal visitor never actually sees this version render.
+      const fallback = `<div style="font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 20px;color:#111;">
+        <h1>${escapeHtml(product.name)}</h1>
+        <p>${escapeHtml(product.category || "")}${product.size ? " · " + escapeHtml(product.size) : ""}</p>
+        <p>${escapeHtml(priceText)}</p>
+        ${product.description ? `<p>${escapeHtml(product.description)}</p>` : ""}
+        <p>Available at Calloway Market — 2816 Calloway Dr, Unit 100, Bakersfield, CA 93312.</p>
+      </div>`;
+      html = html.replace('<div id="root"></div>', `<div id="root">${fallback}</div>`);
+    }
+
+    res.set("Content-Type", "text/html");
+    res.send(html);
+  } catch (err) {
+    console.error("Product page rendering failed, serving default page instead:", err);
+    try {
+      const origin = `${req.protocol}://${req.get("host")}`;
+      const fallbackRes = await fetch(`${origin}/index.html`);
+      res.set("Content-Type", "text/html");
+      res.send(await fallbackRes.text());
+    } catch {
+      res.status(500).send("Failed to load page.");
+    }
+  }
+});
+
+// Lists every product's page (plus the homepage) so Google can discover
+// and crawl them directly instead of relying on finding links to them.
+app.get("/sitemap.xml", async (req, res) => {
+  try {
+    const origin = `${req.protocol}://${req.get("host")}`;
+    const slugify = (str: string) =>
+      String(str || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+    const urls = [
+      `<url><loc>${origin}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
+      ...currentProducts.map(
+        (p) =>
+          `<url><loc>${origin}/product/${p.id}/${slugify(p.name)}</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>`
+      ),
+    ];
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join("\n")}\n</urlset>`;
+    res.set("Content-Type", "application/xml");
+    res.send(xml);
+  } catch (err) {
+    console.error("Sitemap generation failed:", err);
+    res.status(500).send("Failed to generate sitemap.");
+  }
+});
+
 async function startLocalDevServer() {
   await ensureDataLoaded();
     
@@ -2748,6 +2887,109 @@ async function startLocalDevServer() {
     console.log(`Calloway Market Bakersfield Full-Stack application successfully running on http://localhost:${PORT}`);
   });
 }
+
+// Server-rendered product pages — gives each product a real, unique,
+// crawlable HTML page (title, meta description, and visible content)
+// instead of relying entirely on client-side JavaScript, which search
+// engines don't reliably execute before generating a search snippet.
+// Real visitors still get the full interactive React app — this only
+// swaps in real content ahead of the JS bundle taking over, and falls
+// straight through to the normal site for anything it can't handle.
+app.get("/product/:id/:slug?", async (req, res) => {
+  try {
+    const products = await loadProductsFromDisk();
+    const product = products.find((p) => p.id === req.params.id);
+
+    // Fetches the actual currently-deployed index.html (same origin) so
+    // the injected asset script/style tags always match whatever Vite
+    // just built — their filenames change (content-hashed) on every
+    // deploy, so this can't be hardcoded.
+    const origin = `${req.protocol}://${req.get("host")}`;
+    const templateRes = await fetch(`${origin}/index.html`);
+    let html = await templateRes.text();
+
+    if (product) {
+      const priceText = product.price !== undefined && product.price !== null ? `$${Number(product.price).toFixed(2)}` : "";
+      const title = `${product.name} | Calloway Market`;
+      const descriptionParts = [
+        product.name,
+        product.size ? `(${product.size})` : "",
+        priceText ? `${priceText} at Calloway Market, Bakersfield, CA.` : "at Calloway Market, Bakersfield, CA.",
+        product.description || "",
+      ].filter(Boolean);
+      const description = descriptionParts.join(" ").slice(0, 300);
+      const pageUrl = `${origin}/product/${product.id}/${req.params.slug || ""}`;
+
+      html = html.replace(/<title>.*?<\/title>/s, `<title>${escapeHtml(title)}</title>`);
+      if (html.includes('name="description"')) {
+        html = html.replace(/<meta name="description" content=".*?"\s*\/?>/s, `<meta name="description" content="${escapeHtml(description)}" />`);
+      } else {
+        html = html.replace("</title>", `</title>\n    <meta name="description" content="${escapeHtml(description)}" />`);
+      }
+      if (html.includes('property="og:title"')) {
+        html = html.replace(/<meta property="og:title" content=".*?"\s*\/?>/s, `<meta property="og:title" content="${escapeHtml(title)}" />`);
+      }
+      if (html.includes('property="og:description"')) {
+        html = html.replace(/<meta property="og:description" content=".*?"\s*\/?>/s, `<meta property="og:description" content="${escapeHtml(description)}" />`);
+      }
+      if (html.includes('property="og:url"')) {
+        html = html.replace(/<meta property="og:url" content=".*?"\s*\/?>/s, `<meta property="og:url" content="${escapeHtml(pageUrl)}" />`);
+      }
+
+      // Real visible content for anything that doesn't execute the JS
+      // bundle (search engine crawlers, link-preview bots, etc). Once
+      // React mounts for an actual visitor, it replaces this div's
+      // contents with the normal interactive product view.
+      const fallbackContent = `<div style="font-family:system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;color:#111;">
+      <p style="font-size:13px;color:#666;"><a href="/" style="color:#666;">Calloway Market</a> &rsaquo; ${escapeHtml(product.category || "Products")}</p>
+      <h1 style="font-size:28px;margin:12px 0 4px;">${escapeHtml(product.name)}</h1>
+      <p style="color:#555;margin:4px 0;">${escapeHtml(product.category || "")}${product.size ? " · " + escapeHtml(product.size) : ""}</p>
+      ${priceText ? `<p style="font-size:20px;font-weight:700;margin:12px 0;">${priceText}</p>` : ""}
+      ${product.description ? `<p style="margin:12px 0;line-height:1.5;">${escapeHtml(product.description)}</p>` : ""}
+      <p style="margin-top:24px;color:#555;">Available at Calloway Market, 2816 Calloway Dr, Unit 100, Bakersfield, CA 93312. Order for delivery via DoorDash or Grubhub, or visit us in-store.</p>
+    </div>`;
+      html = html.replace('<div id="root"></div>', `<div id="root">${fallbackContent}</div>`);
+    }
+
+    res.set("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
+  } catch (err) {
+    console.error("Product page render failed, falling back to default site:", err);
+    try {
+      const origin = `${req.protocol}://${req.get("host")}`;
+      const fallbackRes = await fetch(`${origin}/index.html`);
+      res.set("Content-Type", "text/html; charset=utf-8");
+      res.send(await fallbackRes.text());
+    } catch {
+      res.status(500).send("Unable to load page.");
+    }
+  }
+});
+
+// Lists every product page URL so Google can discover and crawl each one
+// directly, instead of relying only on internal links from the homepage.
+app.get("/sitemap.xml", async (req, res) => {
+  try {
+    const products = await loadProductsFromDisk();
+    const origin = `${req.protocol}://${req.get("host")}`;
+    const slugify = (str: string) =>
+      String(str || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+    const urls = [
+      `  <url><loc>${origin}/</loc><changefreq>daily</changefreq></url>`,
+      ...products.map(
+        (p) => `  <url><loc>${origin}/product/${p.id}/${slugify(p.name)}</loc><changefreq>weekly</changefreq></url>`
+      ),
+    ].join("\n");
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>`;
+    res.set("Content-Type", "application/xml; charset=utf-8");
+    res.send(xml);
+  } catch (err) {
+    console.error("Sitemap generation failed:", err);
+    res.status(500).send("Failed to generate sitemap.");
+  }
+});
 
 if (!process.env.VERCEL) {
   startLocalDevServer();
