@@ -371,7 +371,9 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     }, 4000);
   };
 
-  const categories = Array.from(new Set(products.map((p) => p.category).filter(Boolean)));
+  const categories = Array.from(new Set(products.map((p) => p.category).filter(Boolean))).sort((a, b) =>
+    a.localeCompare(b)
+  );
 
   const [filterCategory, setFilterCategory] = useState("All");
 
