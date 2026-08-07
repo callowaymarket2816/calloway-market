@@ -1379,7 +1379,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     };
 
     const firstRowCells = parseCSVLine(lines[0], delimiter);
-    const headerKeywords = ["name", "product", "spirit", "bottle", "category", "abv", "alcohol", "size", "volume", "stock", "status", "origin", "distillery", "notes", "tasting", "description", "price", "cost", "msrp", "wholesale", "value", "rate", "usd", "upc", "barcode", "ean", "gtin"];
+    const headerKeywords = ["name", "product", "spirit", "bottle", "category", "department", "dept", "abv", "alcohol", "size", "volume", "stock", "status", "origin", "distillery", "notes", "tasting", "description", "price", "cost", "msrp", "wholesale", "value", "rate", "usd", "upc", "barcode", "ean", "gtin"];
     
     const hasHeader = firstRowCells.some(cell => {
       const val = cell.toLowerCase().trim();
@@ -1412,8 +1412,10 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           const val = cells[index] || "";
           if (header.includes("name") || header === "product" || header === "spirit" || header === "bottle" || header === "title") {
             p.name = val;
-          } else if (header.includes("category") || header === "type") {
+          } else if (header.includes("category") || header === "type" || header === "department" || header === "dept") {
             p.category = val;
+          } else if (header === "subdepartment" || header === "subcategory" || header === "subdept") {
+            p.subcategory = val;
           } else if (header.includes("origin") || header.includes("distillery") || header === "source" || header === "maker" || header === "location") {
             p.origin = val;
           } else if (header.includes("abv") || header.includes("alcohol") || header.includes("proof") || header === "percent") {
