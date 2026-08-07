@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import path from "path";
 import { google } from "googleapis";
 
@@ -12,6 +13,14 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+// Compresses every response (gzip/brotli depending on what the browser
+// supports) — with ~1800 products in the catalog, the JSON payload for
+// /api/products was being sent completely uncompressed, which made the
+// initial load of both the Merchant Portal and customer site slower than
+// it needed to be. This typically shrinks a JSON response like that by
+// 70-90%.
+app.use(compression());
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
