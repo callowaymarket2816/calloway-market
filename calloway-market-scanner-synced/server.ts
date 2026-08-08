@@ -1055,6 +1055,36 @@ app.post("/api/products/bulk-set-category", requireMerchantAuth, async (req, res
   }
 });
 
+// Manually renames every product currently in one exact department to
+// another — for typos or unwanted departments the automatic
+// merge-duplicate-departments tool won't catch (that one only merges
+// spelling variants of what it can already tell are "the same" word;
+// this handles a genuinely different name, like "Tabacoo" -> "Tobacco").
+// Single read, single write, regardless of how many products are in
+// that department.
+app.post("/api/products/rename-department", requireMerchantAuth, async (req, res) => {
+  try {
+    const { from, to } = req.body;
+    if (!from || !String(from).trim() || !to || !String(to).trim()) {
+      return res.status(400).json({ error: "Both 'from' and 'to' department names are required." });
+    }
+    const freshProducts = await loadProductsFromDisk();
+    let changed = 0;
+    for (const p of freshProducts) {
+      if (p.category === from) {
+        p.category = String(to).trim();
+        changed++;
+      }
+    }
+    currentProducts = freshProducts;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, changed });
+  } catch (err: any) {
+    console.error("Rename department failed:", err);
+    res.status(500).json({ error: err.message || "Failed to rename department." });
+  }
+});
+
 app.post("/api/products/merge-duplicate-departments", requireMerchantAuth, async (req, res) => {
   try {
     const freshProducts = await loadProductsFromDisk();
