@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { 
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend
@@ -1026,6 +1026,12 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
 
   // Inventory Filtering States
   const [manageSearchQuery, setManageSearchQuery] = useState("");
+  // Pagination for the inventory table — rendering ~1800+ rows (each with
+  // an image) in one go was a real contributor to the portal feeling slow
+  // to load. Resets to page 1 whenever the filtered set changes so you're
+  // never stuck looking at an empty page after a new search/filter.
+  const [inventoryPage, setInventoryPage] = useState(1);
+  const INVENTORY_PAGE_SIZE = 100;
   const [manageCategoryFilter, setManageCategoryFilter] = useState("All");
   const [showMissingUpcOnly, setShowMissingUpcOnly] = useState(false);
   const [showNeedsPhotoReviewOnly, setShowNeedsPhotoReviewOnly] = useState(false);
@@ -1200,6 +1206,43 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
       setUploadMessage(`Error merging departments: ${err.message || err}`);
     } finally {
       setIsMergingDepartments(false);
+    }
+  };
+
+  const [renameDeptFrom, setRenameDeptFrom] = useState("");
+  const [renameDeptTo, setRenameDeptTo] = useState("");
+  const [isRenamingDept, setIsRenamingDept] = useState(false);
+  const handleRenameDepartment = async () => {
+    if (!renameDeptFrom || !renameDeptTo.trim()) return;
+    if (
+      !window.confirm(
+        `Move every product currently in "${renameDeptFrom}" to "${renameDeptTo.trim()}"? Nothing else about those products changes.`
+      )
+    ) {
+      return;
+    }
+    setIsRenamingDept(true);
+    setUploadMessage(null);
+    try {
+      const res = await fetch("/api/products/rename-department", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ from: renameDeptFrom, to: renameDeptTo.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setUploadMessage(`Moved ${data.changed} product(s) from "${renameDeptFrom}" to "${renameDeptTo.trim()}".`);
+        logAction(`Renamed department "${renameDeptFrom}" to "${renameDeptTo.trim()}" (${data.changed} products)`);
+        setRenameDeptFrom("");
+        setRenameDeptTo("");
+        onRefreshAllData();
+      } else {
+        setUploadMessage(data.error || "Failed to rename department.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error renaming department: ${err.message || err}`);
+    } finally {
+      setIsRenamingDept(false);
     }
   };
 
@@ -2139,21 +2182,28 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // canonical entry instead of showing up as separate departments — free
   // -text category entry previously let small typos/casing differences
   // silently create duplicate departments.
-  const categoryCounts = new Map<string, { display: string; count: number }>();
-  for (const p of products || []) {
-    const raw = (p.category || "").trim();
-    if (!raw) continue;
-    const key = raw.toLowerCase();
-    const existing = categoryCounts.get(key);
-    if (existing) {
-      existing.count++;
-    } else {
-      categoryCounts.set(key, { display: raw, count: 1 });
+  //
+  // Memoized — with ~1800+ products, recomputing this on every keystroke
+  // in a search box (or any other unrelated state change) was a real
+  // contributor to the portal feeling slow. Now it only recalculates when
+  // the actual product list changes.
+  const uniqueCategories = useMemo(() => {
+    const categoryCounts = new Map<string, { display: string; count: number }>();
+    for (const p of products || []) {
+      const raw = (p.category || "").trim();
+      if (!raw) continue;
+      const key = raw.toLowerCase();
+      const existing = categoryCounts.get(key);
+      if (existing) {
+        existing.count++;
+      } else {
+        categoryCounts.set(key, { display: raw, count: 1 });
+      }
     }
-  }
-  const uniqueCategories = Array.from(categoryCounts.values())
-    .map((c) => c.display)
-    .sort();
+    return Array.from(categoryCounts.values())
+      .map((c) => c.display)
+      .sort();
+  }, [products]);
 
   const missingUpcCount = (products || []).filter((p: any) => !p.upc).length;
 
@@ -2287,15 +2337,26 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
-  const filteredActiveProducts = (products || []).filter((p: any) => {
-    const matchesSearch = (p.name || "").toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
-                          (p.origin || "").toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
-                          (p.description || "").toLowerCase().includes(manageSearchQuery.toLowerCase());
-    const matchesCategory = manageCategoryFilter === "All" || p.category === manageCategoryFilter;
-    const matchesUpcFilter = !showMissingUpcOnly || !p.upc;
-    const matchesPhotoReviewFilter = !showNeedsPhotoReviewOnly || !!p.imageNeedsReview;
-    return matchesSearch && matchesCategory && matchesUpcFilter && matchesPhotoReviewFilter;
-  });
+  const filteredActiveProducts = useMemo(() => {
+    return (products || []).filter((p: any) => {
+      const matchesSearch = (p.name || "").toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
+                            (p.origin || "").toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
+                            (p.description || "").toLowerCase().includes(manageSearchQuery.toLowerCase());
+      const matchesCategory = manageCategoryFilter === "All" || p.category === manageCategoryFilter;
+      const matchesUpcFilter = !showMissingUpcOnly || !p.upc;
+      const matchesPhotoReviewFilter = !showNeedsPhotoReviewOnly || !!p.imageNeedsReview;
+      return matchesSearch && matchesCategory && matchesUpcFilter && matchesPhotoReviewFilter;
+    });
+  }, [products, manageSearchQuery, manageCategoryFilter, showMissingUpcOnly, showNeedsPhotoReviewOnly]);
+
+  const inventoryTotalPages = Math.max(1, Math.ceil(filteredActiveProducts.length / INVENTORY_PAGE_SIZE));
+  const paginatedActiveProducts = useMemo(
+    () => filteredActiveProducts.slice((inventoryPage - 1) * INVENTORY_PAGE_SIZE, inventoryPage * INVENTORY_PAGE_SIZE),
+    [filteredActiveProducts, inventoryPage]
+  );
+  useEffect(() => {
+    setInventoryPage(1);
+  }, [manageSearchQuery, manageCategoryFilter, showMissingUpcOnly, showNeedsPhotoReviewOnly]);
 
   // Bulk Email Broadcast — sends a message to every coupon-signup
   // subscriber at once. Real customers receive this, so it requires an
@@ -4815,6 +4876,38 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </button>
         </div>
 
+        {/* Rename Department — for a genuinely wrong/typo'd department name
+            (e.g. "Tabacoo") that the automatic typo-merge tool won't catch
+            since it's a different word, not just different spacing/casing */}
+        <div className="flex flex-wrap items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl p-3">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 shrink-0">Rename Department</span>
+          <select
+            value={renameDeptFrom}
+            onChange={(e) => setRenameDeptFrom(e.target.value)}
+            className="px-3 py-2 border border-gray-200 rounded-lg text-xs cursor-pointer bg-white"
+          >
+            <option value="">From...</option>
+            {uniqueCategories.map((cat) => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
+          <span className="text-xs text-gray-400">→</span>
+          <input
+            type="text"
+            value={renameDeptTo}
+            onChange={(e) => setRenameDeptTo(e.target.value)}
+            placeholder="To (type new name)"
+            className="px-3 py-2 border border-gray-200 rounded-lg text-xs flex-1 min-w-[160px]"
+          />
+          <button
+            onClick={handleRenameDepartment}
+            disabled={!renameDeptFrom || !renameDeptTo.trim() || isRenamingDept}
+            className="px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:bg-gray-300 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+          >
+            {isRenamingDept ? "Renaming..." : "Rename"}
+          </button>
+        </div>
+
         {/* Bulk Department Change — appears once products are selected */}
         {selectedInventoryIds.size > 0 && (
           <div className="flex flex-wrap items-center gap-3 bg-indigo-50 border border-indigo-200 rounded-xl p-4">
@@ -4951,8 +5044,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {filteredActiveProducts.length > 0 ? (
-                    filteredActiveProducts.map((product) => (
+                  {paginatedActiveProducts.length > 0 ? (
+                    paginatedActiveProducts.map((product) => (
                       <tr key={product.id} className="hover:bg-slate-50/50 transition">
                         <td className="py-3 px-4">
                           <input
@@ -4968,6 +5061,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                               <img
                                 src={(product as any).imageUrl}
                                 alt={product.name}
+                                loading="lazy"
                                 className="w-full h-full object-contain"
                                 onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                               />
@@ -5114,9 +5208,30 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 </tbody>
               </table>
             </div>
-            <div className="bg-slate-50 px-4 py-3 border-t border-gray-100 text-[10px] text-gray-400 font-medium flex justify-between items-center">
-              <span>Showing {filteredActiveProducts.length} of {products.length} registered products</span>
-              <span>Bakersfield Showroom database</span>
+            <div className="bg-slate-50 px-4 py-3 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-2">
+              <span className="text-[10px] text-gray-400 font-medium">
+                Showing {paginatedActiveProducts.length > 0 ? (inventoryPage - 1) * INVENTORY_PAGE_SIZE + 1 : 0}
+                –{Math.min(inventoryPage * INVENTORY_PAGE_SIZE, filteredActiveProducts.length)} of {filteredActiveProducts.length} matching ({products.length} total registered products)
+              </span>
+              {inventoryTotalPages > 1 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setInventoryPage((p) => Math.max(1, p - 1))}
+                    disabled={inventoryPage === 1}
+                    className="px-3 py-1.5 border border-gray-200 rounded-lg text-[10px] font-bold uppercase tracking-wider text-gray-600 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition"
+                  >
+                    Prev
+                  </button>
+                  <span className="text-[10px] text-gray-500 font-medium">Page {inventoryPage} of {inventoryTotalPages}</span>
+                  <button
+                    onClick={() => setInventoryPage((p) => Math.min(inventoryTotalPages, p + 1))}
+                    disabled={inventoryPage === inventoryTotalPages}
+                    className="px-3 py-1.5 border border-gray-200 rounded-lg text-[10px] font-bold uppercase tracking-wider text-gray-600 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ) : (
