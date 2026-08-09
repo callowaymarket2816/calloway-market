@@ -2337,16 +2337,40 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
+  // Common liquor nicknames mapped to the canonical brand name they refer
+  // to — used ONLY to decide sort order, so a nickname like "Henny" lands
+  // right next to "Hennessy" in the alphabetized list instead of
+  // scattering off to wherever "Henny" would literally fall under H.
+  // Display names in the table are never changed, only the ordering.
+  // Add more pairs here anytime a new nickname comes up.
+  const BRAND_ALIASES: [string, string][] = [
+    ["henny", "hennessy"],
+    ["jack", "jack daniels"],
+    ["capn", "captain morgan"],
+    ["goose", "grey goose"],
+  ];
+  const getProductSortKey = (name: string): string => {
+    const lower = (name || "").toLowerCase().trim();
+    for (const [alias, canonical] of BRAND_ALIASES) {
+      if (lower.includes(alias) && !lower.includes(canonical)) {
+        return `${canonical} ${lower}`;
+      }
+    }
+    return lower;
+  };
+
   const filteredActiveProducts = useMemo(() => {
-    return (products || []).filter((p: any) => {
-      const matchesSearch = (p.name || "").toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
-                            (p.origin || "").toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
-                            (p.description || "").toLowerCase().includes(manageSearchQuery.toLowerCase());
-      const matchesCategory = manageCategoryFilter === "All" || p.category === manageCategoryFilter;
-      const matchesUpcFilter = !showMissingUpcOnly || !p.upc;
-      const matchesPhotoReviewFilter = !showNeedsPhotoReviewOnly || !!p.imageNeedsReview;
-      return matchesSearch && matchesCategory && matchesUpcFilter && matchesPhotoReviewFilter;
-    });
+    return (products || [])
+      .filter((p: any) => {
+        const matchesSearch = (p.name || "").toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
+                              (p.origin || "").toLowerCase().includes(manageSearchQuery.toLowerCase()) || 
+                              (p.description || "").toLowerCase().includes(manageSearchQuery.toLowerCase());
+        const matchesCategory = manageCategoryFilter === "All" || p.category === manageCategoryFilter;
+        const matchesUpcFilter = !showMissingUpcOnly || !p.upc;
+        const matchesPhotoReviewFilter = !showNeedsPhotoReviewOnly || !!p.imageNeedsReview;
+        return matchesSearch && matchesCategory && matchesUpcFilter && matchesPhotoReviewFilter;
+      })
+      .sort((a: any, b: any) => getProductSortKey(a.name).localeCompare(getProductSortKey(b.name)));
   }, [products, manageSearchQuery, manageCategoryFilter, showMissingUpcOnly, showNeedsPhotoReviewOnly]);
 
   const inventoryTotalPages = Math.max(1, Math.ceil(filteredActiveProducts.length / INVENTORY_PAGE_SIZE));
