@@ -974,10 +974,51 @@ app.patch("/api/products/:id", requireMerchantAuth, async (req, res) => {
 // Products with no recognizable size pattern in their name are simply
 // left as-is (nothing to extract).
 const SIZE_PATTERN = /(\d+(?:\.\d*)?\s?(?:FL\.?\s?OZ|OZ|ML|LTR|L|GAL|GL)\b|\d+\s?PK(?:\s?C(?:AN)?S?)?\b|\d+\s?CT\b|GALLON)/i;
+
+// Common liquor-industry slang for bottle sizes that never actually
+// includes a number+unit in the product name at all (e.g. "JACK DANIELS
+// FIFTH", "TITO'S HANDLE"). Checked as whole words, longest phrase first
+// so "HALF PINT" matches before the plain "PINT" inside it does.
+const SLANG_SIZE_TERMS: [string, string][] = [
+  ["HALF PINT", "200ML"],
+  ["HALF GALLON", "1.75L"],
+  ["HANDLE", "1.75L"],
+  ["FIFTH", "750ML"],
+  ["MAGNUM", "1.5L"],
+  ["PINT", "375ML"],
+  ["NIP", "50ML"],
+  ["MINIATURE", "50ML"],
+  ["MINI", "50ML"],
+];
+
+// Bare size numbers with no unit attached at all (very common shorthand
+// in liquor inventory, e.g. "TITO'S VODKA 750" meaning 750ml). Only
+// matched at the very end of the name — matching a bare number anywhere
+// in the middle would too easily catch a proof number, a year, or
+// something else that isn't a size at all.
+const KNOWN_TRAILING_SIZE_NUMBERS: Record<string, string> = {
+  "50": "50ML", "100": "100ML", "187": "187ML", "200": "200ML",
+  "375": "375ML", "500": "500ML", "700": "700ML", "750": "750ML",
+  "1000": "1L", "1750": "1.75L",
+};
+
 function extractSizeFromName(name: string): string {
-  const match = SIZE_PATTERN.exec(name || "");
-  if (!match) return "";
-  return match[1].trim().replace(/\s+/g, " ").toUpperCase();
+  const upper = String(name || "").toUpperCase().trim();
+  if (!upper) return "";
+
+  const match = SIZE_PATTERN.exec(upper);
+  if (match) return match[1].trim().replace(/\s+/g, " ").toUpperCase();
+
+  for (const [term, size] of SLANG_SIZE_TERMS) {
+    if (new RegExp(`\\b${term}\\b`).test(upper)) return size;
+  }
+
+  const trailingNumberMatch = upper.match(/(\d+)\s*$/);
+  if (trailingNumberMatch && KNOWN_TRAILING_SIZE_NUMBERS[trailingNumberMatch[1]]) {
+    return KNOWN_TRAILING_SIZE_NUMBERS[trailingNumberMatch[1]];
+  }
+
+  return "";
 }
 
 app.post("/api/products/fill-missing-sizes", requireMerchantAuth, async (req, res) => {
@@ -2103,7 +2144,7 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
 
     const scannerProducts = stateRow?.data?.products;
     if (!Array.isArray(scannerProducts)) {
-      return res.json({ priceChanges: [], newProducts: [], totalScannerProducts: 0 });
+      return res.json({ priceChanges: [], missingPrices: [], newProducts: [], discontinuedCandidates: [], totalScannerProducts: 0 });
     }
 
     // The scanner tracks received/on-hand quantity per product per week —
@@ -2144,9 +2185,10 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
       if ((p as any).upc) byUpc.set(normalize((p as any).upc), p);
     }
 
-    let dismissed: { priceDismissed: Record<string, number>; newDismissed: string[] } = {
+    let dismissed: { priceDismissed: Record<string, number>; newDismissed: string[]; discontinuedDismissed: string[] } = {
       priceDismissed: {},
       newDismissed: [],
+      discontinuedDismissed: [],
     };
     if (supabase) {
       const { data: dismissedRow } = await supabase
@@ -2155,6 +2197,28 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
         .eq("key", "stockroom_sync_dismissed")
         .maybeSingle();
       if (dismissedRow?.value) dismissed = { ...dismissed, ...dismissedRow.value };
+    }
+    if (!Array.isArray(dismissed.discontinuedDismissed)) dismissed.discontinuedDismissed = [];
+
+    // Discontinued detection — a product that exists on the website with a
+    // UPC that no longer appears ANYWHERE in the stockroom scanner's data
+    // at all is a strong signal it's been discontinued/removed from what's
+    // actually carried, and worth reviewing for removal from the site too.
+    const scannerUpcSet = new Set(scannerProducts.filter((sp) => sp.upc).map((sp) => normalize(sp.upc)));
+    const discontinuedCandidates: any[] = [];
+    for (const p of freshProducts) {
+      const upc = (p as any).upc;
+      if (!upc) continue; // no UPC to cross-reference at all, can't tell either way
+      const key = normalize(upc);
+      if (scannerUpcSet.has(key)) continue; // still tracked in the scanner, not discontinued
+      if (dismissed.discontinuedDismissed.includes(key)) continue;
+      discontinuedCandidates.push({
+        upc,
+        productId: p.id,
+        name: p.name,
+        category: p.category,
+        price: (p as any).price,
+      });
     }
 
     const priceChanges: any[] = [];
@@ -2212,7 +2276,7 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
       }
     }
 
-    res.json({ priceChanges, missingPrices, newProducts, totalScannerProducts: scannerProducts.length });
+    res.json({ priceChanges, missingPrices, newProducts, discontinuedCandidates, totalScannerProducts: scannerProducts.length });
   } catch (err: any) {
     console.error("Stockroom sync check failed:", err);
     res.status(500).json({ error: err.message || "Failed to check stockroom scanner." });
@@ -2393,6 +2457,29 @@ app.post("/api/stockroom-sync/bulk-push", requireMerchantAuth, async (req, res) 
   }
 });
 
+// Bulk-deletes selected products in ONE safe operation — for removing
+// discontinued items flagged by Stockroom Sync (or any other bulk-select
+// context) without deleting them one at a time. Single read, single
+// write, regardless of how many are selected.
+app.post("/api/stockroom-sync/bulk-delete", requireMerchantAuth, async (req, res) => {
+  try {
+    const { productIds } = req.body;
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return res.status(400).json({ error: "'productIds' must be a non-empty array." });
+    }
+    const freshProducts = await loadProductsFromDisk();
+    const idSet = new Set(productIds);
+    const remaining = freshProducts.filter((p) => !idSet.has(p.id));
+    const deleted = freshProducts.length - remaining.length;
+    currentProducts = remaining;
+    await saveProductsToDisk(currentProducts);
+    res.json({ success: true, deleted });
+  } catch (err: any) {
+    console.error("Stockroom bulk delete failed:", err);
+    res.status(500).json({ error: err.message || "Bulk delete failed." });
+  }
+});
+
 app.post("/api/stockroom-sync/bulk-dismiss", requireMerchantAuth, async (req, res) => {
   if (!supabase) return res.status(503).json({ error: "Database not configured." });
   try {
@@ -2407,10 +2494,12 @@ app.post("/api/stockroom-sync/bulk-dismiss", requireMerchantAuth, async (req, re
       .select("value")
       .eq("key", "stockroom_sync_dismissed")
       .maybeSingle();
-    const dismissed: { priceDismissed: Record<string, number>; newDismissed: string[] } = dismissedRow?.value || {
+    const dismissed: { priceDismissed: Record<string, number>; newDismissed: string[]; discontinuedDismissed: string[] } = dismissedRow?.value || {
       priceDismissed: {},
       newDismissed: [],
+      discontinuedDismissed: [],
     };
+    if (!Array.isArray(dismissed.discontinuedDismissed)) dismissed.discontinuedDismissed = [];
 
     if (type === "price") {
       for (const item of items) {
@@ -2421,8 +2510,13 @@ app.post("/api/stockroom-sync/bulk-dismiss", requireMerchantAuth, async (req, re
         const key = normalize(item.upc);
         if (!dismissed.newDismissed.includes(key)) dismissed.newDismissed.push(key);
       }
+    } else if (type === "discontinued") {
+      for (const item of items) {
+        const key = normalize(item.upc);
+        if (!dismissed.discontinuedDismissed.includes(key)) dismissed.discontinuedDismissed.push(key);
+      }
     } else {
-      return res.status(400).json({ error: "'type' must be 'price' or 'new'." });
+      return res.status(400).json({ error: "'type' must be 'price', 'new', or 'discontinued'." });
     }
 
     const { error } = await supabase
@@ -2896,10 +2990,27 @@ async function startLocalDevServer() {
 // Real visitors still get the full interactive React app — this only
 // swaps in real content ahead of the JS bundle taking over, and falls
 // straight through to the normal site for anything it can't handle.
+// Same allowlist as the customer-facing site's own filter — keeps the
+// server-rendered product pages and sitemap consistent with what
+// customers can actually browse to. A product outside these categories
+// (snacks, tobacco, household, etc.) is treated as "not found" here too,
+// same as if it didn't exist for customer-facing purposes at all.
+const CUSTOMER_VISIBLE_CATEGORIES = [
+  "mixer",
+  "liquor", "whiskey", "vodka", "tequila", "gin", "rum", "brandy", "cognac", "liqueur", "scotch",
+  "beer",
+  "wine",
+  "soda",
+];
+const isCustomerVisibleCategory = (category: string) => {
+  const lower = String(category || "").toLowerCase();
+  return CUSTOMER_VISIBLE_CATEGORIES.some((c) => lower.includes(c));
+};
+
 app.get("/product/:id/:slug?", async (req, res) => {
   try {
-    const products = await loadProductsFromDisk();
-    const product = products.find((p) => p.id === req.params.id);
+    const allProducts = await loadProductsFromDisk();
+    const product = allProducts.find((p) => p.id === req.params.id && isCustomerVisibleCategory(p.category));
 
     // Fetches the actual currently-deployed index.html (same origin) so
     // the injected asset script/style tags always match whatever Vite
@@ -2971,7 +3082,7 @@ app.get("/product/:id/:slug?", async (req, res) => {
 // directly, instead of relying only on internal links from the homepage.
 app.get("/sitemap.xml", async (req, res) => {
   try {
-    const products = await loadProductsFromDisk();
+    const products = (await loadProductsFromDisk()).filter((p) => isCustomerVisibleCategory(p.category));
     const origin = `${req.protocol}://${req.get("host")}`;
     const slugify = (str: string) =>
       String(str || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
