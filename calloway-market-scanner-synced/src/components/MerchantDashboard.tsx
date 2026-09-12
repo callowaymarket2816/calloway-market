@@ -317,6 +317,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [stockroomPriceChanges, setStockroomPriceChanges] = useState<any[]>([]);
   const [stockroomMissingPrices, setStockroomMissingPrices] = useState<any[]>([]);
   const [stockroomNewProducts, setStockroomNewProducts] = useState<any[]>([]);
+  const [stockroomDiscontinued, setStockroomDiscontinued] = useState<any[]>([]);
   const [isCheckingStockroom, setIsCheckingStockroom] = useState(false);
   const [stockroomCheckedOnce, setStockroomCheckedOnce] = useState(false);
   const [stockroomActionId, setStockroomActionId] = useState<string | null>(null);
@@ -331,11 +332,12 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [selectedPriceChangeUpcs, setSelectedPriceChangeUpcs] = useState<Set<string>>(new Set());
   const [selectedMissingPriceUpcs, setSelectedMissingPriceUpcs] = useState<Set<string>>(new Set());
   const [selectedNewProductUpcs, setSelectedNewProductUpcs] = useState<Set<string>>(new Set());
+  const [selectedDiscontinuedUpcs, setSelectedDiscontinuedUpcs] = useState<Set<string>>(new Set());
   const [isBulkActingStockroom, setIsBulkActingStockroom] = useState(false);
 
   const stockroomDepartments = Array.from(
     new Set(
-      [...stockroomPriceChanges, ...stockroomMissingPrices, ...stockroomNewProducts]
+      [...stockroomPriceChanges, ...stockroomMissingPrices, ...stockroomNewProducts, ...stockroomDiscontinued]
         .map((item) => (item.category || "Uncategorized").trim())
         .filter(Boolean)
     )
@@ -357,6 +359,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     const matchesActivity = !hideStaleProducts || p.recentlyActive !== false;
     return matchesDept && matchesActivity;
   });
+  const filteredDiscontinued = stockroomDiscontinued.filter(
+    (p) => stockroomDeptFilter === "All" || (p.category || "Uncategorized") === stockroomDeptFilter
+  );
 
   const togglePriceChangeSelection = (upc: string) => {
     setSelectedPriceChangeUpcs((prev) => {
@@ -479,6 +484,124 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     }
   };
 
+  // Discontinued products — flagged when a product's UPC no longer
+  // appears anywhere in the stockroom scanner's data at all. "Discard"
+  // here means "keep it on the site, stop flagging it" (e.g. a
+  // seasonal item you know is coming back) — the actual removal action
+  // is the delete button, which is separate and requires its own
+  // confirmation since it's irreversible.
+  const toggleDiscontinuedSelection = (upc: string) => {
+    setSelectedDiscontinuedUpcs((prev) => {
+      const next = new Set(prev);
+      if (next.has(upc)) next.delete(upc);
+      else next.add(upc);
+      return next;
+    });
+  };
+  const toggleSelectAllDiscontinued = () => {
+    setSelectedDiscontinuedUpcs((prev) =>
+      prev.size === filteredDiscontinued.length ? new Set() : new Set(filteredDiscontinued.map((p) => p.upc))
+    );
+  };
+
+  const handleBulkDeleteDiscontinued = async () => {
+    const toDelete = stockroomDiscontinued.filter((p) => selectedDiscontinuedUpcs.has(p.upc));
+    if (toDelete.length === 0) return;
+    if (
+      !window.confirm(
+        `Permanently delete ${toDelete.length} product(s) from your website? This can't be undone — make sure these are genuinely discontinued first.`
+      )
+    ) {
+      return;
+    }
+    setIsBulkActingStockroom(true);
+    try {
+      const res = await fetch("/api/stockroom-sync/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ productIds: toDelete.map((p) => p.productId) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setStockroomDiscontinued((prev) => prev.filter((p) => !selectedDiscontinuedUpcs.has(p.upc)));
+        setSelectedDiscontinuedUpcs(new Set());
+        setUploadMessage(`Deleted ${data.deleted} discontinued product(s) from the site.`);
+        logAction(`Stockroom sync: bulk-deleted ${data.deleted} discontinued products`);
+        onRefreshAllData();
+      } else {
+        setUploadMessage(data.error || "Failed to delete products.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error deleting products: ${err.message || err}`);
+    } finally {
+      setIsBulkActingStockroom(false);
+    }
+  };
+
+  const handleBulkDismissDiscontinued = async () => {
+    const toDismiss = stockroomDiscontinued.filter((p) => selectedDiscontinuedUpcs.has(p.upc));
+    if (toDismiss.length === 0) return;
+    setIsBulkActingStockroom(true);
+    try {
+      await fetch("/api/stockroom-sync/bulk-dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({
+          type: "discontinued",
+          items: toDismiss.map((p) => ({ upc: p.upc })),
+        }),
+      });
+      setStockroomDiscontinued((prev) => prev.filter((p) => !selectedDiscontinuedUpcs.has(p.upc)));
+      setSelectedDiscontinuedUpcs(new Set());
+    } catch (err: any) {
+      setUploadMessage(`Error dismissing: ${err.message || err}`);
+    } finally {
+      setIsBulkActingStockroom(false);
+    }
+  };
+
+  const handleKeepDiscontinued = async (item: any) => {
+    setStockroomActionId(item.upc);
+    try {
+      await fetch("/api/stockroom-sync/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ type: "discontinued", upc: item.upc }),
+      });
+      setStockroomDiscontinued((prev) => prev.filter((p) => p.upc !== item.upc));
+    } catch (err: any) {
+      setUploadMessage(`Error keeping product: ${err.message || err}`);
+    } finally {
+      setStockroomActionId(null);
+    }
+  };
+
+  const handleDeleteDiscontinued = async (item: any) => {
+    if (!window.confirm(`Permanently delete "${item.name}" from your website? This can't be undone.`)) {
+      return;
+    }
+    setStockroomActionId(item.upc);
+    try {
+      const res = await fetch("/api/stockroom-sync/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Merchant-Key": merchantKey },
+        body: JSON.stringify({ productIds: [item.productId] }),
+      });
+      if (res.ok) {
+        setStockroomDiscontinued((prev) => prev.filter((p) => p.upc !== item.upc));
+        logAction(`Stockroom sync: deleted discontinued product "${item.name}"`);
+        onRefreshAllData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setUploadMessage(errData.error || "Failed to delete product.");
+      }
+    } catch (err: any) {
+      setUploadMessage(`Error deleting product: ${err.message || err}`);
+    } finally {
+      setStockroomActionId(null);
+    }
+  };
+
   const handlePushMissingPrice = async (change: any) => {
     setStockroomActionId(change.upc);
     try {
@@ -597,6 +720,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     setSelectedPriceChangeUpcs(new Set());
     setSelectedMissingPriceUpcs(new Set());
     setSelectedNewProductUpcs(new Set());
+    setSelectedDiscontinuedUpcs(new Set());
     try {
       const res = await fetch("/api/stockroom-sync/check", { headers: { "X-Merchant-Key": merchantKey } });
       const data = await res.json().catch(() => ({}));
@@ -604,6 +728,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         setStockroomPriceChanges(data.priceChanges || []);
         setStockroomMissingPrices(data.missingPrices || []);
         setStockroomNewProducts(data.newProducts || []);
+        setStockroomDiscontinued(data.discontinuedCandidates || []);
         setStockroomCheckedOnce(true);
       } else {
         setUploadMessage(data.error || "Failed to check stockroom scanner.");
@@ -2070,11 +2195,12 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
     fetchAnalytics();
   }, [searchCount]);
 
-  useEffect(() => {
-    if (analytics) {
-      runAiAudit();
-    }
-  }, [analytics === null]);
+  // The AI audit used to fire automatically the moment analytics loaded —
+  // on EVERY single Merchant Portal visit, whether or not the merchant
+  // actually wanted it. Gemini calls take several real seconds, and doing
+  // this unconditionally on every page load was a meaningful, unnecessary
+  // contributor to the portal feeling slow to load. Now it only runs when
+  // the merchant explicitly clicks refresh — see handleManualRefresh below.
 
   const handleManualRefresh = () => {
     fetchAnalytics();
@@ -4457,7 +4583,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </div>
         </div>
 
-        {stockroomCheckedOnce && stockroomPriceChanges.length === 0 && stockroomMissingPrices.length === 0 && stockroomNewProducts.length === 0 && (
+        {stockroomCheckedOnce && stockroomPriceChanges.length === 0 && stockroomMissingPrices.length === 0 && stockroomNewProducts.length === 0 && stockroomDiscontinued.length === 0 && (
           <p className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
             ✓ Everything's in sync — no price changes or new products waiting for review.
           </p>
@@ -4725,6 +4851,75 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                     Push Live
                   </button>
                 </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {filteredDiscontinued.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedDiscontinuedUpcs.size === filteredDiscontinued.length && filteredDiscontinued.length > 0}
+                  onChange={toggleSelectAllDiscontinued}
+                  className="cursor-pointer"
+                />
+                Discontinued — Not Found in Scanner ({filteredDiscontinued.length})
+              </label>
+              {selectedDiscontinuedUpcs.size > 0 && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleBulkDismissDiscontinued}
+                    disabled={isBulkActingStockroom}
+                    className="px-3 py-1.5 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    Keep {selectedDiscontinuedUpcs.size}
+                  </button>
+                  <button
+                    onClick={handleBulkDeleteDiscontinued}
+                    disabled={isBulkActingStockroom}
+                    className="px-3 py-1.5 bg-rose-700 hover:bg-rose-800 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer"
+                  >
+                    {isBulkActingStockroom ? "Deleting..." : `Delete ${selectedDiscontinuedUpcs.size}`}
+                  </button>
+                </div>
+              )}
+            </div>
+            <p className="text-[11px] text-gray-400">
+              These products are on your website but their UPC no longer appears anywhere in your stockroom scanner
+              — a strong sign they've been discontinued. Double-check before deleting; "Keep" stops flagging one
+              without removing it.
+            </p>
+            {filteredDiscontinued.map((item) => (
+              <div key={item.upc} className="flex items-center gap-3 border border-rose-100 bg-rose-50/40 rounded-xl p-3">
+                <input
+                  type="checkbox"
+                  checked={selectedDiscontinuedUpcs.has(item.upc)}
+                  onChange={() => toggleDiscontinuedSelection(item.upc)}
+                  className="cursor-pointer shrink-0"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate">{item.name}</p>
+                  <p className="text-xs text-gray-500">
+                    {item.category || "Uncategorized"} · ${Number(item.price || 0).toFixed(2)} · UPC {item.upc}
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleKeepDiscontinued(item)}
+                  disabled={stockroomActionId === item.upc}
+                  className="px-3 py-2 border border-gray-200 text-gray-500 hover:bg-gray-50 text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer shrink-0"
+                >
+                  Keep
+                </button>
+                <button
+                  onClick={() => handleDeleteDiscontinued(item)}
+                  disabled={stockroomActionId === item.upc}
+                  className="px-3 py-2 bg-rose-700 hover:bg-rose-800 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition cursor-pointer shrink-0"
+                >
+                  Delete
+                </button>
               </div>
             ))}
           </div>
