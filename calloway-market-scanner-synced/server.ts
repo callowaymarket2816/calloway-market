@@ -628,6 +628,107 @@ function escapeHtml(str: string): string {
     .replace(/'/g, "&#039;");
 }
 
+// Shared, name-aware category normalization — used anywhere a category
+// gets assigned or corrected server-side (stockroom sync new-product
+// pushes, and the "Fix Existing Categories" cleanup). Mirrors the
+// client-side CSV-import version so both use the exact same rules. The
+// previous server-side version only looked at the category TEXT itself,
+// so a generic "Liquor" label from the stockroom scanner just stayed
+// "Liquor" forever instead of being split into Whiskey/Vodka/Gin/etc. —
+// this version checks the product's own NAME for a specific spirit type
+// whenever the category itself is only the generic bucket.
+const WHISKEY_BRANDS = ["jack daniel", "jim beam", "crown royal", "jameson", "maker's mark", "makers mark", "buffalo trace", "wild turkey", "evan williams", "seagram's 7", "seagrams 7", "fireball", "canadian club", "dewar's", "dewars", "johnnie walker", "chivas", "glenlivet", "glenfiddich", "knob creek", "woodford", "bulleit", "ezra brooks", "old forester", "four roses", "jack daniel's", "1792", "elijah craig", "basil hayden", "crown apple"];
+const TEQUILA_BRANDS = ["patron", "don julio", "jose cuervo", "hornitos", "espolon", "casamigos", "herradura", "milagro", "cazadores", "sauza", "olmeca", "1800", "clase azul", "avion"];
+const VODKA_BRANDS = ["smirnoff", "tito's", "titos", "grey goose", "absolut", "svedka", "ketel one", "stolichnaya", "stoli", "skyy", "pinnacle", "new amsterdam", "deep eddy", "belvedere", "ciroc"];
+const GIN_BRANDS = ["tanqueray", "bombay", "beefeater", "hendrick's", "hendricks", "gordon's", "gordons", "seagram's gin", "seagrams gin"];
+const RUM_BRANDS = ["bacardi", "captain morgan", "malibu", "myers", "mount gay", "kraken", "sailor jerry", "cruzan"];
+const BRANDY_BRANDS = ["e&j", "e & j", "christian brothers", "paul masson", "korbel", "presidente"];
+const COGNAC_BRANDS = ["hennessy", "courvoisier", "remy martin", "rémy martin", "martell", "camus", "hine"];
+const LIQUEUR_BRANDS = ["baileys", "bailey's", "kahlua", "grand marnier", "cointreau", "disaronno", "jagermeister", "jägermeister", "southern comfort", "amaretto", "triple sec", "chambord", "frangelico", "midori"];
+
+function guessSpiritTypeFromName(name: string): string | null {
+  const n = (name || "").toLowerCase();
+  if (n.includes("whiskey") || n.includes("whisky") || n.includes("bourbon") || n.includes("scotch") || n.includes("rye") || WHISKEY_BRANDS.some((b) => n.includes(b))) return "Whiskey";
+  if (n.includes("tequila") || n.includes("mezcal") || TEQUILA_BRANDS.some((b) => n.includes(b))) return "Tequila";
+  if (n.includes("vodka") || VODKA_BRANDS.some((b) => n.includes(b))) return "Vodka";
+  if (n.includes(" gin ") || n.startsWith("gin ") || n.endsWith(" gin") || GIN_BRANDS.some((b) => n.includes(b))) return "Gin";
+  if (n.includes("rum") || RUM_BRANDS.some((b) => n.includes(b))) return "Rum";
+  if (n.includes("cognac") || COGNAC_BRANDS.some((b) => n.includes(b))) return "Cognac";
+  if (n.includes("brandy") || BRANDY_BRANDS.some((b) => n.includes(b))) return "Brandy";
+  if (n.includes("liqueur") || n.includes("schnapps") || LIQUEUR_BRANDS.some((b) => n.includes(b))) return "Liqueur";
+  return null;
+}
+
+function normalizeCategoryServerSide(rawCategory: string, productName: string = ""): string {
+  let cat = rawCategory || "";
+  const catLower = cat.toLowerCase();
+  if (catLower.includes("whiskey") || catLower.includes("bourbon") || catLower.includes("scotch") || catLower.includes("rye")) {
+    cat = "Whiskey";
+  } else if (catLower.includes("tequila") || catLower.includes("mezcal")) {
+    cat = "Tequila";
+  } else if (catLower.includes("vodka")) {
+    cat = "Vodka";
+  } else if (catLower.includes("gin")) {
+    cat = "Gin";
+  } else if (catLower.includes("rum")) {
+    cat = "Rum";
+  } else if (catLower.includes("cognac")) {
+    cat = "Cognac";
+  } else if (catLower.includes("brandy")) {
+    cat = "Brandy";
+  } else if (catLower.includes("liqueur")) {
+    cat = "Liqueur";
+  } else if (catLower === "liquor" || catLower.includes("spirit")) {
+    // Generic bucket with no specific type in the category text itself —
+    // try to work out the real spirit type from the product name instead.
+    cat = guessSpiritTypeFromName(productName) || "Liquor";
+  } else if (catLower.includes("wine") || catLower.includes("cabernet") || catLower.includes("chardonnay") || catLower.includes("merlot") || catLower.includes("champagne") || catLower.includes("prosecco") || catLower.includes("sparkling")) {
+    cat = "Wine";
+  } else if (catLower.includes("beer") || catLower.includes("ipa") || catLower.includes("lager") || catLower.includes("cider")) {
+    cat = "Beer";
+  } else if (catLower.includes("rtd") || catLower.includes("seltzer") || catLower.includes("cocktail")) {
+    cat = "RTD";
+  } else if (catLower.includes("soda") || catLower.includes("coke") || catLower.includes("cola")) {
+    cat = "Soda";
+  } else if (catLower.includes("water")) {
+    cat = "Water";
+  } else if (catLower.includes("sports") || catLower.includes("energy") || catLower.includes("gatorade")) {
+    cat = "Sports & Energy Drinks";
+  } else if (catLower.includes("coffee") || catLower.includes("tea") || catLower.includes("juice")) {
+    cat = "Coffee, Tea & Juice";
+  } else if (catLower.includes("snack") || catLower.includes("chip") || catLower.includes("cookie") || catLower.includes("cracker") || catLower.includes("candy")) {
+    cat = "Snacks";
+  } else if (catLower.includes("household") || catLower.includes("supplies")) {
+    cat = "Household";
+  } else if (cat) {
+    // Title-case every word, not just the first character — "beef jerky"
+    // becomes "Beef Jerky", not "Beef jerky". A category that only differs
+    // from an existing one by capitalization/spacing is exactly what was
+    // silently creating duplicate departments before.
+    cat = cat.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+  }
+  return cat;
+}
+
+// Wraps normalizeCategoryServerSide with a check against every category
+// ALREADY in use on the live site — if the computed category matches one
+// that already exists (case-insensitively), the EXACT existing spelling
+// is reused instead. This is the actual fix for duplicate departments:
+// even if two different sources spell "Beer" differently ("beer ", "BEER"),
+// this guarantees new products land in the one true existing department
+// rather than silently creating a look-alike second one.
+function resolveCategoryAgainstExisting(rawCategory: string, productName: string, existingProducts: Product[]): string {
+  const computed = normalizeCategoryServerSide(rawCategory, productName);
+  const computedLower = computed.toLowerCase();
+  for (const p of existingProducts) {
+    const existingCat = (p.category || "").trim();
+    if (existingCat && existingCat.toLowerCase() === computedLower) {
+      return existingCat;
+    }
+  }
+  return computed;
+}
+
 function extractBrand(query: string): string {
   const queryLower = query.toLowerCase();
   const knownBrands = [
@@ -1182,51 +1283,6 @@ app.post("/api/products/merge-duplicate-departments", requireMerchantAuth, async
 });
 
 app.post("/api/products/recategorize", requireMerchantAuth, async (req, res) => {
-  const normalizeCategory = (rawCategory: string): string => {
-    let cat = rawCategory || "";
-    const catLower = cat.toLowerCase();
-    if (catLower.includes("whiskey") || catLower.includes("bourbon") || catLower.includes("scotch") || catLower.includes("rye")) {
-      cat = "Whiskey";
-    } else if (catLower.includes("tequila") || catLower.includes("mezcal")) {
-      cat = "Tequila";
-    } else if (catLower.includes("vodka")) {
-      cat = "Vodka";
-    } else if (catLower.includes("gin")) {
-      cat = "Gin";
-    } else if (catLower.includes("rum")) {
-      cat = "Rum";
-    } else if (catLower.includes("cognac")) {
-      cat = "Cognac";
-    } else if (catLower.includes("brandy")) {
-      cat = "Brandy";
-    } else if (catLower.includes("liqueur")) {
-      cat = "Liqueur";
-    } else if (catLower === "liquor" || catLower.includes("spirit")) {
-      cat = "Liquor";
-    } else if (catLower.includes("wine") || catLower.includes("cabernet") || catLower.includes("chardonnay") || catLower.includes("merlot") || catLower.includes("champagne") || catLower.includes("prosecco") || catLower.includes("sparkling")) {
-      cat = "Wine";
-    } else if (catLower.includes("beer") || catLower.includes("ipa") || catLower.includes("lager") || catLower.includes("cider")) {
-      cat = "Beer";
-    } else if (catLower.includes("rtd") || catLower.includes("seltzer") || catLower.includes("cocktail")) {
-      cat = "RTD";
-    } else if (catLower.includes("soda") || catLower.includes("coke") || catLower.includes("cola")) {
-      cat = "Soda";
-    } else if (catLower.includes("water")) {
-      cat = "Water";
-    } else if (catLower.includes("sports") || catLower.includes("energy") || catLower.includes("gatorade")) {
-      cat = "Sports & Energy Drinks";
-    } else if (catLower.includes("coffee") || catLower.includes("tea") || catLower.includes("juice")) {
-      cat = "Coffee, Tea & Juice";
-    } else if (catLower.includes("snack") || catLower.includes("chip") || catLower.includes("cookie") || catLower.includes("cracker") || catLower.includes("candy")) {
-      cat = "Snacks";
-    } else if (catLower.includes("household") || catLower.includes("supplies")) {
-      cat = "Household";
-    } else if (cat) {
-      cat = cat.charAt(0).toUpperCase() + cat.slice(1);
-    }
-    return cat;
-  };
-
   try {
     // Always load a fresh, current snapshot immediately before writing —
     // never rely on whatever the server happened to have cached in memory
@@ -1235,7 +1291,7 @@ app.post("/api/products/recategorize", requireMerchantAuth, async (req, res) => 
     const freshProducts = await loadProductsFromDisk();
     let fixed = 0;
     for (const product of freshProducts) {
-      const corrected = normalizeCategory(product.category);
+      const corrected = resolveCategoryAgainstExisting(product.category, product.name, freshProducts);
       if (corrected !== product.category) {
         product.category = corrected;
         fixed++;
@@ -2177,13 +2233,27 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
       return false;
     };
 
-    const normalize = (upc: string) => String(upc || "").replace(/^0+/, "");
+    // Strips everything except digits before comparing two UPCs — not just
+    // leading zeros. This also fixes common real-world mismatches: stray
+    // spaces or dashes typed/pasted into a UPC field, and the classic
+    // Excel artifact where a long barcode number gets a trailing ".0"
+    // appended when the column wasn't formatted as text. Without this,
+    // two UPCs that are visually/functionally the same barcode could
+    // fail to match and get wrongly flagged as "not found" on either side.
+    const normalize = (upc: string) => String(upc || "").replace(/\.0$/, "").replace(/\D/g, "").replace(/^0+/, "");
 
     const freshProducts = await loadProductsFromDisk();
     const byUpc = new Map<string, Product>();
     for (const p of freshProducts) {
       if ((p as any).upc) byUpc.set(normalize((p as any).upc), p);
     }
+
+    // Diagnostics — with UPC-matching issues, it's otherwise impossible to
+    // tell "the match logic is broken" apart from "these really are two
+    // different, disconnected sets of UPCs" without seeing these numbers.
+    const websiteProductsWithUpc = freshProducts.filter((p) => (p as any).upc).length;
+    const scannerProductsWithUpc = scannerProducts.filter((sp) => sp.upc).length;
+    const matchedUpcCount = scannerProducts.filter((sp) => sp.upc && byUpc.has(normalize(sp.upc))).length;
 
     let dismissed: { priceDismissed: Record<string, number>; newDismissed: string[]; discontinuedDismissed: string[] } = {
       priceDismissed: {},
@@ -2276,7 +2346,14 @@ app.get("/api/stockroom-sync/check", requireMerchantAuth, async (req, res) => {
       }
     }
 
-    res.json({ priceChanges, missingPrices, newProducts, discontinuedCandidates, totalScannerProducts: scannerProducts.length });
+    res.json({
+      priceChanges,
+      missingPrices,
+      newProducts,
+      discontinuedCandidates,
+      totalScannerProducts: scannerProducts.length,
+      diagnostics: { websiteProductsWithUpc, scannerProductsWithUpc, matchedUpcCount },
+    });
   } catch (err: any) {
     console.error("Stockroom sync check failed:", err);
     res.status(500).json({ error: err.message || "Failed to check stockroom scanner." });
@@ -2367,7 +2444,7 @@ app.post("/api/stockroom-sync/push", requireMerchantAuth, async (req, res) => {
       const newProduct: any = {
         id: `stockroom-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         name: String(name).trim(),
-        category: category || "Uncategorized",
+        category: resolveCategoryAgainstExisting(category, String(name).trim(), freshProducts),
         size: size || undefined,
         upc: upc || undefined,
         price: parsedPrice,
@@ -2435,7 +2512,7 @@ app.post("/api/stockroom-sync/bulk-push", requireMerchantAuth, async (req, res) 
           // exact same millisecond.
           id: `stockroom-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000000)}`,
           name: String(item.name).trim(),
-          category: item.category || "Uncategorized",
+          category: resolveCategoryAgainstExisting(item.category, String(item.name).trim(), freshProducts),
           size: item.size || undefined,
           upc: item.upc || undefined,
           price: isNaN(parsedPrice) ? undefined : parsedPrice,
@@ -2487,7 +2564,7 @@ app.post("/api/stockroom-sync/bulk-dismiss", requireMerchantAuth, async (req, re
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "'items' must be a non-empty array." });
     }
-    const normalize = (u: string) => String(u || "").replace(/^0+/, "");
+    const normalize = (u: string) => String(u || "").replace(/\.0$/, "").replace(/\D/g, "").replace(/^0+/, "");
 
     const { data: dismissedRow } = await supabase
       .from("site_settings")
@@ -2534,7 +2611,7 @@ app.post("/api/stockroom-sync/dismiss", requireMerchantAuth, async (req, res) =>
   if (!supabase) return res.status(503).json({ error: "Database not configured." });
   try {
     const { type, upc, price } = req.body;
-    const normalize = (u: string) => String(u || "").replace(/^0+/, "");
+    const normalize = (u: string) => String(u || "").replace(/\.0$/, "").replace(/\D/g, "").replace(/^0+/, "");
     const key = normalize(upc);
 
     const { data: dismissedRow } = await supabase
