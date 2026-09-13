@@ -730,6 +730,12 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         setStockroomNewProducts(data.newProducts || []);
         setStockroomDiscontinued(data.discontinuedCandidates || []);
         setStockroomCheckedOnce(true);
+        if (data.diagnostics) {
+          const { websiteProductsWithUpc, scannerProductsWithUpc, matchedUpcCount } = data.diagnostics;
+          setUploadMessage(
+            `Matching check — website products with a UPC: ${websiteProductsWithUpc}. Scanner products with a UPC: ${scannerProductsWithUpc}. Of those, matched to each other: ${matchedUpcCount}. If that matched number looks far too low, the two UPC sets may be formatted differently somewhere — let me know these three numbers.`
+          );
+        }
       } else {
         setUploadMessage(data.error || "Failed to check stockroom scanner.");
       }
