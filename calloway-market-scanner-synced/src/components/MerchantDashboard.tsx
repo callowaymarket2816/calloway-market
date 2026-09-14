@@ -317,7 +317,13 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   const [stockroomPriceChanges, setStockroomPriceChanges] = useState<any[]>([]);
   const [stockroomMissingPrices, setStockroomMissingPrices] = useState<any[]>([]);
   const [stockroomNewProducts, setStockroomNewProducts] = useState<any[]>([]);
+  // "Not Confirmed" (still named stockroomDiscontinued internally) = no
+  // match in the scanner at all, or matched but no scan/count activity in
+  // the last 4 weeks. "Confirmed" = matched AND has recent activity —
+  // shown separately, informational only, so the merchant can see the
+  // matching is working correctly instead of just trusting it blindly.
   const [stockroomDiscontinued, setStockroomDiscontinued] = useState<any[]>([]);
+  const [stockroomConfirmed, setStockroomConfirmed] = useState<any[]>([]);
   const [isCheckingStockroom, setIsCheckingStockroom] = useState(false);
   const [stockroomCheckedOnce, setStockroomCheckedOnce] = useState(false);
   const [stockroomActionId, setStockroomActionId] = useState<string | null>(null);
@@ -327,6 +333,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
   // one department at a time (e.g. just "Beer") and act on several items
   // at once instead of one-by-one.
   const [stockroomDeptFilter, setStockroomDeptFilter] = useState("All");
+  const [stockroomActiveTab, setStockroomActiveTab] = useState<"priceChanges" | "missingPrices" | "newProducts" | "notConfirmed" | "confirmed">("priceChanges");
   const [showOnlyPriceIncreases, setShowOnlyPriceIncreases] = useState(false);
   const [hideStaleProducts, setHideStaleProducts] = useState(false);
   const [selectedPriceChangeUpcs, setSelectedPriceChangeUpcs] = useState<Set<string>>(new Set());
@@ -728,7 +735,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
         setStockroomPriceChanges(data.priceChanges || []);
         setStockroomMissingPrices(data.missingPrices || []);
         setStockroomNewProducts(data.newProducts || []);
-        setStockroomDiscontinued(data.discontinuedCandidates || []);
+        setStockroomDiscontinued(data.notConfirmedProducts || []);
+        setStockroomConfirmed(data.confirmedProducts || []);
         setStockroomCheckedOnce(true);
         if (data.diagnostics) {
           const { websiteProductsWithUpc, scannerProductsWithUpc, matchedUpcCount } = data.diagnostics;
@@ -4595,7 +4603,32 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </p>
         )}
 
-        {(stockroomPriceChanges.length > 0 || stockroomNewProducts.length > 0) && (
+        {stockroomCheckedOnce && (
+          <div className="flex flex-wrap gap-2 border-b border-gray-100 pb-3">
+            {([
+              ["priceChanges", "Price Changes", stockroomPriceChanges.length],
+              ["missingPrices", "Missing Prices", stockroomMissingPrices.length],
+              ["newProducts", "New Products", stockroomNewProducts.length],
+              ["notConfirmed", "Not Confirmed", stockroomDiscontinued.length],
+              ["confirmed", "Confirmed", stockroomConfirmed.length],
+            ] as const).map(([tabId, label, count]) => (
+              <button
+                key={tabId}
+                type="button"
+                onClick={() => setStockroomActiveTab(tabId)}
+                className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition cursor-pointer ${
+                  stockroomActiveTab === tabId
+                    ? "bg-indigo-900 text-white"
+                    : "bg-gray-50 text-gray-500 hover:bg-gray-100"
+                }`}
+              >
+                {label} ({count})
+              </button>
+            ))}
+          </div>
+        )}
+
+        {stockroomCheckedOnce && (
           <div className="flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-2">
               <label className="text-[10px] uppercase font-bold text-gray-500 tracking-wider shrink-0">Department</label>
@@ -4610,7 +4643,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 ))}
               </select>
             </div>
-            {stockroomPriceChanges.length > 0 && (
+            {stockroomActiveTab === "priceChanges" && (
               <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
                 <input
                   type="checkbox"
@@ -4621,19 +4654,24 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 Only show price increases (scanner price higher than website)
               </label>
             )}
-            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={hideStaleProducts}
-                onChange={(e) => setHideStaleProducts(e.target.checked)}
-                className="cursor-pointer"
-              />
-              Hide products not carried in the last 4 weeks
-            </label>
+            {(stockroomActiveTab === "priceChanges" || stockroomActiveTab === "missingPrices" || stockroomActiveTab === "newProducts") && (
+              <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={hideStaleProducts}
+                  onChange={(e) => setHideStaleProducts(e.target.checked)}
+                  className="cursor-pointer"
+                />
+                Hide products not carried in the last 4 weeks
+              </label>
+            )}
           </div>
         )}
 
-        {filteredPriceChanges.length > 0 && (
+        {stockroomActiveTab === "priceChanges" && filteredPriceChanges.length === 0 && stockroomCheckedOnce && (
+          <p className="text-sm text-gray-400 py-6 text-center">No price changes to review right now.</p>
+        )}
+        {stockroomActiveTab === "priceChanges" && filteredPriceChanges.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500 cursor-pointer">
@@ -4697,7 +4735,10 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </div>
         )}
 
-        {filteredMissingPrices.length > 0 && (
+        {stockroomActiveTab === "missingPrices" && filteredMissingPrices.length === 0 && stockroomCheckedOnce && (
+          <p className="text-sm text-gray-400 py-6 text-center">No products missing a price right now.</p>
+        )}
+        {stockroomActiveTab === "missingPrices" && filteredMissingPrices.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500 cursor-pointer">
@@ -4761,7 +4802,10 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </div>
         )}
 
-        {filteredNewProducts.length > 0 && (
+        {stockroomActiveTab === "newProducts" && filteredNewProducts.length === 0 && stockroomCheckedOnce && (
+          <p className="text-sm text-gray-400 py-6 text-center">No new products found in your scanner right now.</p>
+        )}
+        {stockroomActiveTab === "newProducts" && filteredNewProducts.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500 cursor-pointer">
@@ -4862,7 +4906,10 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </div>
         )}
 
-        {filteredDiscontinued.length > 0 && (
+        {stockroomActiveTab === "notConfirmed" && filteredDiscontinued.length === 0 && stockroomCheckedOnce && (
+          <p className="text-sm text-gray-400 py-6 text-center">Nothing needs review right now.</p>
+        )}
+        {stockroomActiveTab === "notConfirmed" && filteredDiscontinued.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500 cursor-pointer">
@@ -4872,7 +4919,7 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                   onChange={toggleSelectAllDiscontinued}
                   className="cursor-pointer"
                 />
-                Discontinued — Not Found in Scanner ({filteredDiscontinued.length})
+                Not Confirmed — Needs Review ({filteredDiscontinued.length})
               </label>
               {selectedDiscontinuedUpcs.size > 0 && (
                 <div className="flex gap-2">
@@ -4894,9 +4941,9 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
               )}
             </div>
             <p className="text-[11px] text-gray-400">
-              These products are on your website but their UPC no longer appears anywhere in your stockroom scanner
-              — a strong sign they've been discontinued. Double-check before deleting; "Keep" stops flagging one
-              without removing it.
+              These products either don't match anything in your stockroom scanner, or matched but haven't shown any
+              scan/count activity in the last 4 weeks. That's not proof they're discontinued — double-check before
+              deleting. "Keep" stops flagging one without removing it.
             </p>
             {filteredDiscontinued.map((item) => (
               <div key={item.upc} className="flex items-center gap-3 border border-rose-100 bg-rose-50/40 rounded-xl p-3">
@@ -4928,6 +4975,33 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {stockroomActiveTab === "confirmed" && (
+          <div className="space-y-2">
+            {stockroomConfirmed.length === 0 && stockroomCheckedOnce ? (
+              <p className="text-sm text-gray-400 py-6 text-center">No confirmed matches yet — try "Check for Updates" first.</p>
+            ) : (
+              <>
+                <p className="text-[11px] text-gray-400">
+                  These products matched your stockroom scanner and showed actual scan/count activity in the last 4
+                  weeks — no action needed, shown here just so you can see the matching is working.
+                </p>
+                <div className="space-y-1.5">
+                  {stockroomConfirmed
+                    .filter((c) => stockroomDeptFilter === "All" || (c.category || "Uncategorized") === stockroomDeptFilter)
+                    .map((item) => (
+                      <div key={item.upc} className="flex items-center gap-3 border border-emerald-100 bg-emerald-50/30 rounded-lg px-3 py-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-gray-800 truncate">{item.name}</p>
+                          <p className="text-[10px] text-gray-500">{item.category || "Uncategorized"} · UPC {item.upc}</p>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
