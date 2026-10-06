@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef } from "react";
 import { MapPin } from "lucide-react";
-import { runStory } from "./scrollStory";
-import "./scrollStory.css";
+import { runStory } from "./storyScene";
+import "./ScrollStory.css";
 
 export interface StoryCounts {
   beer: number; // beer, seltzer, hard tea, other RTD
