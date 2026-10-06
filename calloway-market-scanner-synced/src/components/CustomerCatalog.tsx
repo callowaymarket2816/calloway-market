@@ -4,6 +4,7 @@ import { Search, MapPin, Inbox, CheckCircle2, ChevronRight, ChevronLeft, Chevron
 import { Product } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import callowayLogo from "../assets/calloway-logo.png";
+import ScrollStory from "./ScrollStory";
 
 // New Calloway "storefront" look: bright red/cream palette + Archivo
 // display font, matching the homepage design mock. Colors are kept as
@@ -33,6 +34,21 @@ const DEPT_COLORS = [
   { c: "#c43a72", soft: "#fbe6ef" }, // rtd
 ];
 const deptColor = (index: number) => DEPT_COLORS[index % DEPT_COLORS.length];
+
+// Sorts each department into the part of the homepage story it belongs to,
+// by name. Order matters: "hard tea" is beer-side, not a plain drink.
+type StoryGroup = "wine" | "liquor" | "beer" | "snacks" | "drinks";
+const STORY_GROUP_RULES: [StoryGroup, RegExp][] = [
+  ["wine", /wine|champagne|sparkling|prosecco/i],
+  ["liquor", /liquor|whisk|bourbon|scotch|vodka|tequila|mezcal|\bgin\b|\brum\b|cognac|brandy|liqueur|spirit/i],
+  ["beer", /beer|seltzer|\brtd\b|cider|malt|hard tea|hard soda/i],
+  ["snacks", /snack|chip|candy|jerky|cookie|cracker|nut|sweet|popcorn|pretzel/i],
+  ["drinks", /soda|drink|water|energy|juice|coffee|tea|gatorade|mixer|beverage/i],
+];
+const storyGroupOf = (category: string): StoryGroup | null => {
+  for (const [group, rule] of STORY_GROUP_RULES) if (rule.test(category)) return group;
+  return null;
+};
 
 // Loads the Archivo display font used throughout the new look. Injected
 // once on mount rather than via index.html, so this component carries
@@ -673,12 +689,46 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
       .sort((a, b) => b.count - a.count);
   }, [categories, products]);
 
+  // Live counts for the scroll story at the top of the page
+  const storyCounts = React.useMemo(() => {
+    const counts = { beer: 0, liquor: 0, wine: 0, snacks: 0, drinks: 0 };
+    for (const d of bentoDepartments) {
+      const g = storyGroupOf(d.name);
+      if (g) counts[g] += d.count;
+    }
+    return counts;
+  }, [bentoDepartments]);
+
+  // "Shop beer / liquor / snacks" buttons in the story. Jumps straight to that
+  // department when one clearly dominates the group, otherwise to the
+  // department grid so the visitor can pick (whiskey vs. vodka vs. tequila).
+  const handleStoryShop = (group: "beer" | "liquor" | "snacks") => {
+    const inGroup = bentoDepartments.filter((d) => {
+      const g = storyGroupOf(d.name);
+      return g === group || (group === "liquor" && g === "wine");
+    });
+    const total = inGroup.reduce((sum, d) => sum + d.count, 0);
+    const top = inGroup[0]; // bentoDepartments is sorted by size
+    const scrollTo = (id: string) =>
+      window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+    if (top && (inGroup.length === 1 || top.count / total >= 0.6)) {
+      handleFilterCategoryChange(top.name);
+      scrollTo("catalog-results");
+    } else {
+      setFilterCategory("All");
+      setSearchTerm("");
+      scrollTo("departments");
+    }
+  };
+
   return (
     <div
       className="-mx-4 sm:-mx-6 lg:-mx-8 -my-10 pb-24"
       id="customer-view"
       style={{ background: C.bg, fontFamily: "'Archivo', 'Archivo Variable', 'Helvetica Neue', Arial, system-ui, sans-serif", ["--calloway-font" as any]: "'Archivo', 'Archivo Variable', 'Helvetica Neue', Arial, system-ui, sans-serif" }}
     >
+      <ScrollStory counts={storyCounts} onShop={handleStoryShop} />
+
       <div className="px-4 py-3 flex items-center justify-between border-b" style={{ background: "#fefefd", borderColor: "#e5e5e0" }}>
         <button className="p-1.5 text-gray-700" aria-label="Menu">
           <Menu className="w-6 h-6" />
@@ -781,7 +831,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
 
           {/* Department bento grid — sized by real item counts, red/cream look */}
           {!filtersActive && bentoDepartments.length > 0 && (
-            <div className="px-4 pt-4">
+            <div className="px-4 pt-4 scroll-mt-24" id="departments">
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 auto-rows-[120px] gap-3">
                 {bentoDepartments.map((dept, i) => {
                   const Icon = getCategoryIcon(undefined);
@@ -835,7 +885,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                       value={signupEmail}
                       onChange={(e) => setSignupEmail(e.target.value)}
                       disabled={signupStatus === "loading"}
-                      className="flex-1 px-4 py-2.5 bg-white/15 border border-white/30 rounded-full text-white placeholder-white/70 text-sm focus:outline-none focus:ring-2 focus:ring-white/40"
+                      className="flex-1 min-w-0 px-4 py-2.5 bg-white/15 border border-white/30 rounded-full text-white placeholder-white/70 text-sm focus:outline-none focus:ring-2 focus:ring-white/40"
                     />
                     <button
                       type="submit"
@@ -853,7 +903,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           </div>
 
           {filtersActive && (
-            <div className="px-4 pt-6 space-y-4">
+            <div className="px-4 pt-6 space-y-4 scroll-mt-24" id="catalog-results">
               <h2 className="text-lg font-extrabold text-gray-900">
                 {searchActive ? `Results for "${searchTerm}"` : filterCategory}
               </h2>
