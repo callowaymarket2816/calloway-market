@@ -1,9 +1,52 @@
 import React, { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { Search, MapPin, Inbox, CheckCircle2, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, FileText, Info, ShoppingBag, ShoppingCart, Menu, Home, Store, X, Wine, Martini, Beer, Zap, Cookie, CupSoda, Package, Droplet, Coffee } from "lucide-react";
+import { Search, MapPin, Inbox, CheckCircle2, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, FileText, Info, ShoppingBag, ShoppingCart, Menu, Home, Store, X, Wine, Martini, Beer, Zap, Cookie, CupSoda, Package, Droplet, Coffee, ArrowUpRight } from "lucide-react";
 import { Product } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import callowayLogo from "../assets/calloway-logo.png";
+
+// New Calloway "storefront" look: bright red/cream palette + Archivo
+// display font, matching the homepage design mock. Colors are kept as
+// plain hex (not a Tailwind theme change) so this drops in without
+// touching tailwind.config.
+const C = {
+  red: "#e4002b",
+  redPress: "#c20025",
+  redSoft: "#fdeef0",
+  bg: "#fffaf4",
+  tile: "#f0f0ec",
+  ink: "#101828",
+};
+
+// Soft per-department colors for the bento grid + product card media,
+// cycled by category so every department gets a distinct look without
+// hand-mapping every possible category name.
+const DEPT_COLORS = [
+  { c: "#a86b12", soft: "#fff1d6" }, // beer / amber
+  { c: "#c25e17", soft: "#fde9d9" }, // snacks
+  { c: "#2f7fc9", soft: "#e2f0fb" }, // drinks / soda
+  { c: "#8a5a2b", soft: "#f4e9de" }, // liquor
+  { c: "#9b2242", soft: "#f8e5ec" }, // wine
+  { c: "#5f8a1c", soft: "#ebf4e0" }, // grocery
+  { c: "#1f8794", soft: "#dff2f3" }, // health
+  { c: "#8a5cc0", soft: "#efe8f8" }, // sweets
+  { c: "#c43a72", soft: "#fbe6ef" }, // rtd
+];
+const deptColor = (index: number) => DEPT_COLORS[index % DEPT_COLORS.length];
+
+// Loads the Archivo display font used throughout the new look. Injected
+// once on mount rather than via index.html, so this component carries
+// its own font dependency.
+function useArchivoFont() {
+  useEffect(() => {
+    if (document.getElementById("calloway-archivo-font")) return;
+    const link = document.createElement("link");
+    link.id = "calloway-archivo-font";
+    link.rel = "stylesheet";
+    link.href = "https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap";
+    document.head.appendChild(link);
+  }, []);
+}
 
 interface CustomerCatalogProps {
   products: Product[];
@@ -70,6 +113,7 @@ const SUBTEXT_SIZE_CLASSES: Record<string, string> = {
 };
 
 export default function CustomerCatalog({ products, isLoading, onSearchLog }: CustomerCatalogProps) {
+  useArchivoFont();
   const triggerSearchFetch = () => {};
 
   const DOORDASH_STORE_ID = "34675059";
@@ -453,38 +497,47 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     setExpandedCategories((prev) => ({ ...prev, [category]: !prev[category] }));
   };
 
-  const ProductCard = ({ product }: { product: Product }) => {
+  const ProductCard = ({ product, colorIndex = 0 }: { product: Product; colorIndex?: number }) => {
     const IconComp = getCategoryIcon(product.iconName);
     const displayPrice = product.storePrice ?? product.price;
+    const { c, soft } = deptColor(colorIndex);
     return (
       <div
         onClick={() => setSelectedProduct(product)}
-        className="snap-start shrink-0 w-[220px] bg-white border border-gray-200 rounded-2xl overflow-hidden cursor-pointer hover:shadow-md transition"
+        style={{ fontFamily: "var(--calloway-font)" }}
+        className="snap-start shrink-0 w-[220px] bg-white border border-[#e5e5e0] rounded-[18px] overflow-hidden cursor-pointer hover:shadow-lg transition shadow-[0_1px_2px_rgba(16,24,40,0.04),0_8px_24px_rgba(16,24,40,0.06)]"
       >
-        <div className="h-36 bg-gray-50 flex items-center justify-center relative">
-          {product.featured && (
-            <span className="absolute top-2 left-2 bg-emerald-600 text-white text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full">
-              Featured
-            </span>
-          )}
-          {(product as any).imageUrl ? (
-            <img
-              src={(product as any).imageUrl}
-              alt={product.name}
-              className="w-full h-full object-contain p-3"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-            />
-          ) : (
-            <IconComp className="w-14 h-14 text-gray-300" strokeWidth={1.5} />
-          )}
+        <div className="relative p-2.5">
+          <div
+            className="aspect-[5/4] rounded-[14px] flex items-center justify-center relative overflow-hidden"
+            style={{ background: soft }}
+          >
+            {product.featured && (
+              <span className="absolute top-2 left-2 bg-[#fdf1dc] text-[#a15c07] text-[10px] font-bold uppercase tracking-wide px-2.5 py-1 rounded-full">
+                Featured
+              </span>
+            )}
+            {(product as any).imageUrl ? (
+              <img
+                src={(product as any).imageUrl}
+                alt={product.name}
+                className="w-full h-full object-contain p-3"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+            ) : (
+              <div className="w-[46%] aspect-square rounded-full bg-white flex items-center justify-center" style={{ color: c }}>
+                <IconComp className="w-1/2 h-1/2" strokeWidth={1.5} />
+              </div>
+            )}
+          </div>
         </div>
-        <div className="p-3.5 space-y-2">
-          <h3 className="text-[15px] font-semibold text-gray-900 leading-snug line-clamp-2 min-h-[40px]">
+        <div className="px-3 pb-3.5 space-y-1.5">
+          <h3 className="text-[15px] font-bold text-[#101828] leading-snug line-clamp-2 min-h-[40px]" style={{ fontStretch: "100%" }}>
             {product.name}
           </h3>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between pt-1">
             {displayPrice ? (
-              <span className="text-lg font-bold text-gray-900">${displayPrice.toFixed(2)}</span>
+              <span className="text-xl font-extrabold text-[#101828]">${displayPrice.toFixed(2)}</span>
             ) : (
               <span className="text-xs text-gray-400 uppercase">Price unavailable</span>
             )}
@@ -497,7 +550,10 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
               e.stopPropagation();
               addToCart(product);
             }}
-            className="w-full py-2.5 bg-[#E4002B] hover:bg-[#c40025] text-white text-sm font-bold rounded-full transition cursor-pointer"
+            className="w-full py-2.5 text-sm font-bold rounded-full transition cursor-pointer text-white"
+            style={{ background: C.red }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = C.redPress)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = C.red)}
           >
             Add to cart
           </button>
@@ -607,15 +663,29 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
     return content;
   };
 
+  // Department bento grid — sized by real item counts (top two categories
+  // get a "big" 2x2 tile, the rest are standard tiles), matching the new
+  // homepage design. Shown on the home view only (no active search/filter).
+  const bentoDepartments = React.useMemo(() => {
+    return categories
+      .map((cat) => ({ name: cat, count: products.filter((p) => p.category === cat).length }))
+      .filter((d) => d.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }, [categories, products]);
+
   return (
-    <div className="-mx-4 sm:-mx-6 lg:-mx-8 -my-10 bg-white pb-24" id="customer-view">
-      <div className="bg-white text-gray-900 px-4 py-3 flex items-center justify-between border-b border-gray-100">
+    <div
+      className="-mx-4 sm:-mx-6 lg:-mx-8 -my-10 pb-24"
+      id="customer-view"
+      style={{ background: C.bg, fontFamily: "'Archivo', 'Archivo Variable', 'Helvetica Neue', Arial, system-ui, sans-serif", ["--calloway-font" as any]: "'Archivo', 'Archivo Variable', 'Helvetica Neue', Arial, system-ui, sans-serif" }}
+    >
+      <div className="px-4 py-3 flex items-center justify-between border-b" style={{ background: "#fefefd", borderColor: "#e5e5e0" }}>
         <button className="p-1.5 text-gray-700" aria-label="Menu">
           <Menu className="w-6 h-6" />
         </button>
         <img src={callowayLogo} alt="Calloway Market" className="h-9 w-auto" />
         <div className="flex items-center gap-1 text-xs font-semibold">
-          <ShoppingBag className="w-4 h-4 text-[#E4002B]" />
+          <ShoppingBag className="w-4 h-4" style={{ color: C.red }} />
           <div className="text-right leading-tight">
             <div className="text-gray-400 text-[10px] font-normal">Delivery</div>
             <div className="underline text-gray-700">Bakersfield</div>
@@ -623,7 +693,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
         </div>
       </div>
 
-      <div className="px-4 py-3 bg-white border-b border-gray-100">
+      <div className="px-4 py-3 border-b" style={{ background: "#fefefd", borderColor: "#e5e5e0" }}>
         <form onSubmit={handleSearchSubmit} className="relative mb-3">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
           <input
@@ -632,7 +702,8 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
             placeholder="Search Calloway Market"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-11 pr-4 py-3 bg-gray-100 rounded-full text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#E4002B]/30 text-sm"
+            className="w-full pl-11 pr-4 py-3 rounded-full placeholder-gray-500 focus:outline-none focus:ring-2 text-sm"
+            style={{ background: C.tile, color: C.ink, boxShadow: "none" }}
           />
         </form>
         {/* Mobile-only filter row — on larger screens the sidebar below takes over */}
@@ -640,7 +711,8 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
           <select
             value={filterCategory}
             onChange={(e) => handleFilterCategoryChange(e.target.value)}
-            className="flex-1 px-3 py-2 bg-gray-100 rounded-full text-xs font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#E4002B]/30 cursor-pointer"
+            className="flex-1 px-3 py-2 rounded-full text-xs font-semibold text-gray-700 focus:outline-none cursor-pointer"
+            style={{ background: C.tile }}
           >
             <option value="All">All Categories</option>
             {categories.map((cat) => (
@@ -707,22 +779,54 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
             </div>
           )}
 
+          {/* Department bento grid — sized by real item counts, red/cream look */}
+          {!filtersActive && bentoDepartments.length > 0 && (
+            <div className="px-4 pt-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 auto-rows-[120px] gap-3">
+                {bentoDepartments.map((dept, i) => {
+                  const Icon = getCategoryIcon(undefined);
+                  const { c, soft } = deptColor(i);
+                  const isBig = i < 2;
+                  return (
+                    <button
+                      key={dept.name}
+                      onClick={() => handleFilterCategoryChange(dept.name)}
+                      className={`relative isolate overflow-hidden flex flex-col justify-between gap-3 rounded-[18px] p-4 text-left cursor-pointer transition hover:brightness-[0.98] ${isBig ? "col-span-2 row-span-2 p-5" : ""}`}
+                      style={{ background: soft, color: C.ink }}
+                    >
+                      <div className="w-11 h-11 rounded-xl bg-white flex items-center justify-center" style={{ color: c }}>
+                        <Icon className="w-6 h-6" strokeWidth={1.6} />
+                      </div>
+                      <div>
+                        <div className={`font-extrabold leading-tight ${isBig ? "text-2xl" : "text-base"}`} style={{ fontStretch: "108%" }}>
+                          {dept.name}
+                        </div>
+                        <div className="text-sm text-[#4a5060] mt-0.5">{dept.count} items</div>
+                      </div>
+                      <ArrowUpRight className="absolute top-3 right-3 w-4 h-4 opacity-0 group-hover:opacity-100" style={{ color: C.ink }} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div className="px-4 pt-4">
-            <div className="rounded-2xl bg-gradient-to-br from-[#1a1a1a] to-[#3a3a3a] text-white p-6">
+            <div className="rounded-2xl text-white p-6" style={{ background: C.red }}>
               {signupStatus === "success" ? (
                 <div className="space-y-2">
-                  <p className="text-sm font-bold uppercase tracking-wide text-[#ff6b81]">You're In!</p>
-                  <p className="font-mono text-2xl bg-black/30 rounded-lg py-3 px-4 inline-block select-all">
+                  <p className="text-sm font-bold uppercase tracking-wide text-white">You're In!</p>
+                  <p className="font-mono text-2xl bg-black/15 rounded-lg py-3 px-4 inline-block select-all">
                     {signupCouponCode}
                   </p>
-                  <p className="text-white/50 text-[11px]">
+                  <p className="text-white/80 text-[11px]">
                     Show this at checkout for 10% off. Excludes cigarettes, tobacco, lotto & lottery. Must be 21+.
                   </p>
                 </div>
               ) : (
                 <form onSubmit={handleEmailSignup} className="space-y-3">
-                  <h2 className="text-xl font-extrabold leading-snug">Get 10% Off<br/>Your Next Visit</h2>
-                  <p className="text-white/60 text-xs">Enter your email for an instant coupon code.</p>
+                  <h2 className="text-xl font-extrabold leading-snug" style={{ fontStretch: "104%" }}>Get 10% Off<br/>Your Next Visit</h2>
+                  <p className="text-white/80 text-xs">Enter your email for an instant coupon code.</p>
                   <div className="flex gap-2">
                     <input
                       type="email"
@@ -731,17 +835,18 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                       value={signupEmail}
                       onChange={(e) => setSignupEmail(e.target.value)}
                       disabled={signupStatus === "loading"}
-                      className="flex-1 px-4 py-2.5 bg-white/10 border border-white/20 rounded-full text-white placeholder-white/40 text-sm focus:outline-none focus:ring-2 focus:ring-[#E4002B]/50"
+                      className="flex-1 px-4 py-2.5 bg-white/15 border border-white/30 rounded-full text-white placeholder-white/70 text-sm focus:outline-none focus:ring-2 focus:ring-white/40"
                     />
                     <button
                       type="submit"
                       disabled={signupStatus === "loading"}
-                      className="px-5 py-2.5 bg-[#E4002B] hover:bg-[#c40025] text-white text-xs font-bold rounded-full transition cursor-pointer disabled:opacity-50 shrink-0"
+                      className="px-5 py-2.5 bg-white hover:bg-white/90 text-xs font-bold rounded-full transition cursor-pointer disabled:opacity-50 shrink-0"
+                      style={{ color: C.red }}
                     >
                       {signupStatus === "loading" ? "..." : "Get Code"}
                     </button>
                   </div>
-                  {signupStatus === "error" && <p className="text-rose-300 text-xs">{signupErrorMsg}</p>}
+                  {signupStatus === "error" && <p className="text-white/90 text-xs">{signupErrorMsg}</p>}
                 </form>
               )}
             </div>
@@ -815,7 +920,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                       {isExpanded ? (
                         <div className="px-4 grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
                           {allItems.map((product) => (
-                            <ProductCard key={product.id} product={product} />
+                            <ProductCard key={product.id} product={product} colorIndex={categoryIndex} />
                           ))}
                         </div>
                       ) : (
@@ -825,7 +930,7 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
                           style={{ scrollbarWidth: "none" }}
                         >
                           {previewItems.map((product) => (
-                            <ProductCard key={product.id} product={product} />
+                            <ProductCard key={product.id} product={product} colorIndex={categoryIndex} />
                           ))}
                         </div>
                       )}
