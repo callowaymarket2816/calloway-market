@@ -2709,6 +2709,53 @@ app.patch("/api/settings/promos", requireMerchantAuth, async (req, res) => {
   }
 });
 
+// Special-price products — the ordered list that drives the scroll story at
+// the top of the customer site (e.g. "Michelob Ultra 18 pack — $18.99").
+// Each item points at an inventory product (productId) so the real photo and
+// name come from the catalog; the merchant sets the special price text, an
+// optional note and an accent color. Stored as one array in site_settings.
+app.get("/api/settings/specials", async (req, res) => {
+  if (!supabase) return res.json({ specials: [] });
+  try {
+    const { data, error } = await supabase
+      .from("site_settings")
+      .select("value")
+      .eq("key", "special_offers")
+      .maybeSingle();
+    if (error) throw error;
+    res.json({ specials: data?.value?.specials || [] });
+  } catch (err) {
+    console.error("Failed to load specials:", err);
+    res.json({ specials: [] });
+  }
+});
+
+app.patch("/api/settings/specials", requireMerchantAuth, async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: "Database not configured." });
+  const { specials } = req.body;
+  if (!Array.isArray(specials)) return res.status(400).json({ error: "specials must be an array." });
+  const cleaned = specials.slice(0, 12).map((s: any, idx: number) => ({
+    id: String(s.id || `special_${Date.now()}_${idx}`),
+    productId: String(s.productId || ""),
+    name: String(s.name || "").slice(0, 120),
+    price: String(s.price || "").slice(0, 20),
+    note: String(s.note || "").slice(0, 80),
+    imageUrl: String(s.imageUrl || ""),
+    accent: /^#[0-9a-fA-F]{6}$/.test(s.accent || "") ? s.accent : "",
+    enabled: s.enabled !== false,
+  }));
+  try {
+    const { error } = await supabase
+      .from("site_settings")
+      .upsert({ key: "special_offers", value: { specials: cleaned } }, { onConflict: "key" });
+    if (error) throw error;
+    res.json({ success: true, specials: cleaned });
+  } catch (err: any) {
+    console.error("Failed to save specials:", err);
+    res.status(500).json({ error: err.message || "Failed to save specials." });
+  }
+});
+
 // Real file upload — used by the promo banner editor (and reusable
 // anywhere else that needs it) so merchants can upload a photo or video
 // directly from their computer instead of pasting a hosted URL. Saves the

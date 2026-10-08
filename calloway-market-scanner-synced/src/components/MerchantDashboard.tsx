@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { AnalyticsSummary, AiInsightsResponse, Product } from "../types";
 import { motion } from "motion/react";
+import SpecialsManager from "./SpecialsManager";
 
 interface MerchantDashboardProps {
   products: Product[];
@@ -4492,6 +4493,8 @@ export default function MerchantDashboard({ products, onRefreshAllData, onRunAiI
           </form>
         )}
       </div>
+
+      <SpecialsManager products={products} merchantKey={merchantKey} />
 
       {/* Photo Lookup Run History */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6 md:p-10 shadow-sm space-y-6 my-12" id="photo-lookup-log">

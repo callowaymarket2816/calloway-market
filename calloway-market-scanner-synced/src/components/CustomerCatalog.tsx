@@ -5,6 +5,9 @@ import { Product } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import callowayLogo from "../assets/calloway-logo.png";
 import ScrollStory from "./ScrollStory";
+import SpecialsStory, { SpecialItem } from "./SpecialsStory";
+
+const SPECIAL_ACCENTS = ["#e4002b", "#f59e0b", "#7c3aed", "#0d9488", "#ec4899", "#2563eb"];
 
 // New Calloway "storefront" look: bright red/cream palette + Archivo
 // display font, matching the homepage design mock. Colors are kept as
@@ -295,6 +298,46 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
       .then((data) => setPromos(data.promos || []))
       .catch(() => {});
   }, []);
+
+  // Special-price products for the scroll story at the top of the page.
+  // The merchant picks inventory products and sets the special price.
+  const [specialsRaw, setSpecialsRaw] = useState<any[]>([]);
+  const [specialsLoaded, setSpecialsLoaded] = useState(false);
+  useEffect(() => {
+    fetch("/api/settings/specials")
+      .then((r) => r.json())
+      .then((data) => setSpecialsRaw(Array.isArray(data.specials) ? data.specials : []))
+      .catch(() => {})
+      .finally(() => setSpecialsLoaded(true));
+  }, []);
+  const specialItems = React.useMemo<SpecialItem[]>(() => {
+    const byId = new Map(products.map((p) => [p.id, p]));
+    return specialsRaw
+      .filter((s) => s && s.enabled !== false && s.price)
+      .map((s, i) => {
+        const p = byId.get(s.productId);
+        return {
+          id: s.id,
+          productId: s.productId,
+          name: s.name || p?.name || "Special",
+          price: s.price,
+          note: s.note || "",
+          imageUrl: s.imageUrl || (p as any)?.imageUrl || "",
+          accent: s.accent || SPECIAL_ACCENTS[i % SPECIAL_ACCENTS.length],
+          inStock: !!p && p.stockStatus !== "Temporarily Out of Stock",
+        };
+      });
+  }, [specialsRaw, products]);
+  const viewSpecial = (id: string) => {
+    const s = specialItems.find((x) => x.id === id) as any;
+    const p = s && products.find((x) => x.id === s.productId);
+    if (p) setSelectedProduct(p);
+  };
+  const addSpecial = (id: string) => {
+    const s = specialItems.find((x) => x.id === id) as any;
+    const p = s && products.find((x) => x.id === s.productId);
+    if (p) addToCart(p, 1);
+  };
 
   const [signupEmail, setSignupEmail] = useState("");
   const [signupStatus, setSignupStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
@@ -727,7 +770,13 @@ export default function CustomerCatalog({ products, isLoading, onSearchLog }: Cu
       id="customer-view"
       style={{ background: C.bg, fontFamily: "'Archivo', 'Archivo Variable', 'Helvetica Neue', Arial, system-ui, sans-serif", ["--calloway-font" as any]: "'Archivo', 'Archivo Variable', 'Helvetica Neue', Arial, system-ui, sans-serif" }}
     >
-      <ScrollStory counts={storyCounts} onShop={handleStoryShop} />
+      {!specialsLoaded ? (
+        <div style={{ height: "60svh", background: "#fff7ec" }} aria-hidden="true" />
+      ) : specialItems.length > 0 ? (
+        <SpecialsStory specials={specialItems} onView={viewSpecial} onAdd={addSpecial} />
+      ) : (
+        <ScrollStory counts={storyCounts} onShop={handleStoryShop} />
+      )}
 
       <div className="px-4 py-3 flex items-center justify-between border-b" style={{ background: "#fefefd", borderColor: "#e5e5e0" }}>
         <button className="p-1.5 text-gray-700" aria-label="Menu">
